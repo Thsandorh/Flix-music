@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import html
 import json
@@ -271,6 +272,33 @@ def _find_mapping_entry(track_ref: dict[str, str], full_id: str) -> dict[str, st
     return None
 
 
+def _track_ref_from_catalog_track(track: dict[str, Any]) -> dict[str, str] | None:
+    artist = _track_artist_name(track)
+    title = str(track.get("name") or track.get("title") or "").strip()
+    if not artist or not title:
+        return None
+    track_ref = {"artist": artist, "title": title}
+    mbid = str(track.get("mbid") or "").strip()
+    if mbid:
+        track_ref["mbid"] = mbid
+    return track_ref
+
+
+def _enrich_track_for_catalog(track: dict[str, Any]) -> dict[str, Any]:
+    if _pick_image(track.get("image")):
+        return track
+    track_ref = _track_ref_from_catalog_track(track)
+    if not track_ref:
+        return track
+    try:
+        enriched = _track_info(track_ref)
+        if isinstance(enriched, dict):
+            return enriched
+    except (HTTPException, requests.RequestException):
+        logger.debug("Catalog enrichment failed for %s - %s", track_ref.get("artist"), track_ref.get("title"))
+    return track
+
+
 def _normalize_track_list(items: Any) -> list[dict[str, Any]]:
     if isinstance(items, dict):
         return [items]
@@ -414,7 +442,7 @@ def _catalog_payload(type: str, catalog_id: str, *, search: str | None = None, l
         logger.exception("Last.fm catalog query failed")
         raise HTTPException(status_code=502, detail=f"Last.fm request failed: {exc}") from exc
 
-    return {"metas": [_build_meta_item(track) for track in tracks]}
+    return {"metas": [_build_meta_item(_enrich_track_for_catalog(track)) for track in tracks]}
 
 
 def _meta_payload(type: str, id: str) -> dict[str, Any]:
