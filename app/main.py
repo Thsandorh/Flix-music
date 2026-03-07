@@ -641,7 +641,12 @@ def _expand_direct_stream_url(url: str) -> str:
         location_parsed = urlparse(location)
         location_params = dict(parse_qsl(location_parsed.query, keep_blank_values=True))
         redirected = str(location_params.get("url") or location).strip()
-        return redirected or normalized
+        redirected_parsed = urlparse(redirected)
+        redirected_host = str(redirected_parsed.netloc or "").strip().lower()
+        redirected_path = str(redirected_parsed.path or "").strip().lower()
+        if redirected_host.endswith("code.run") and redirected_path.startswith("/download/"):
+            return redirected
+        return normalized
     except requests.RequestException:
         logger.debug("Shortlink expansion failed for %s", normalized)
         return normalized

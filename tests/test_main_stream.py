@@ -95,6 +95,24 @@ def test_expand_direct_stream_url_resolves_shortlink(monkeypatch):
     assert main._expand_direct_stream_url("https://clck.ru/test") == "https://site--linkfilesbot--gb24qxlnkkt9.code.run/download/1727945"
 
 
+def test_expand_direct_stream_url_keeps_shortlink_when_target_is_not_download(monkeypatch):
+    class FakeResponse:
+        headers = {
+            "Location": "https://clck.ru/showcaptcha?x=1"
+        }
+
+        def close(self):
+            return None
+
+    class FakeSession:
+        def get(self, url, allow_redirects, stream, headers, timeout):
+            return FakeResponse()
+
+    monkeypatch.setattr(main, "_session", FakeSession())
+
+    assert main._expand_direct_stream_url("https://clck.ru/test") == "https://clck.ru/test"
+
+
 def test_stream_expands_shortlink_to_final_media_url(monkeypatch):
     track_id = main._build_track_id(artist="Daft Punk", title="One More Time")
 
