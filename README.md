@@ -54,7 +54,6 @@ Example generated search query:
 MUSICBRAINZ_USER_AGENT="FlixMusicStremioAddon/0.5 (your-contact@example.com)"
 TELEGRAM_API_ID="123456"
 TELEGRAM_API_HASH="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-TELEGRAM_FILE_MAPPING='{}'
 ```
 
 ### Optional tuning (recommended for production)
@@ -78,7 +77,13 @@ LINKFILESBOT_URL_TEMPLATE="https://t.me/LinkFilesBot?start={recording_id}"
 TELEGRAM_SEARCH_URL_TEMPLATE="https://t.me/vkmusic_bot?start={query_encoded}"
 ```
 
-### Mapping schema (`TELEGRAM_FILE_MAPPING`)
+### Built-in hardcoded mapping (default)
+
+This addon now works without `TELEGRAM_FILE_MAPPING`.
+
+Default behavior:
+- define static mappings directly in `app/main.py` under `HARDCODED_TELEGRAM_MAPPING`
+- optionally override/extend with `TELEGRAM_FILE_MAPPING` env
 
 Mapping key = MusicBrainz recording ID.
 
@@ -121,6 +126,7 @@ Steps:
 
 1. Import repository into Vercel.
 2. Configure required env vars.
+   - `TELEGRAM_FILE_MAPPING` is optional (env override).
 3. Deploy.
 4. Verify:
    - `/healthz`
