@@ -43,3 +43,10 @@ def test_configured_catalog_uses_token_user(monkeypatch):
 
     assert calls == ['sandor555']
     assert payload['metas'][0]['name'] == 'Aerodynamic'
+
+
+def test_configure_page_contains_working_markup():
+    html = main.configure()
+    assert '<input id="lastfmUser"' in html
+    assert 'onclick="buildUrl()"' in html
+    assert '\\"' not in html

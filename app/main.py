@@ -488,7 +488,7 @@ def configure() -> str:
     return r"""<!doctype html>
 <html>
 <head>
-  <meta charset=\"utf-8\">
+  <meta charset="utf-8">
   <title>Flix-music Configure</title>
   <style>
     body { font-family: Segoe UI, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 20px; background: #0f172a; color: #e5e7eb; }
@@ -500,13 +500,13 @@ def configure() -> str:
   </style>
 </head>
 <body>
-  <div class=\"card\">
+  <div class="card">
     <h1>Flix-music configuration</h1>
-    <p class=\"muted\">Enter a Last.fm username to enable personal Loved, Recent and Top Tracks catalogs.</p>
-    <label for=\"lastfmUser\">Last.fm username</label>
-    <input id=\"lastfmUser\" placeholder=\"your-lastfm-username\" />
-    <button type=\"button\" onclick=\"buildUrl()\">Generate manifest URL</button>
-    <p id=\"out\" style=\"margin-top:16px\"></p>
+    <p class="muted">Enter a Last.fm username to enable personal Loved, Recent and Top Tracks catalogs.</p>
+    <label for="lastfmUser">Last.fm username</label>
+    <input id="lastfmUser" placeholder="your-lastfm-username" />
+    <button type="button" onclick="buildUrl()">Generate manifest URL</button>
+    <p id="out" style="margin-top:16px"></p>
   </div>
   <script>
     function base64UrlEncode(value) {
