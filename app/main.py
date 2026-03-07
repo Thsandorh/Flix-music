@@ -808,8 +808,8 @@ def configure() -> str:
             <label class="label" for="lastfmUser">Last.fm username</label>
             <input id="lastfmUser" placeholder="your-lastfm-username" autocomplete="off" />
             <div class="actions">
-              <button type="button" class="primary" onclick="buildUrl()">Generate manifest</button>
-              <button type="button" class="ghost" onclick="copyManifest()">Copy URL</button>
+              <button id="generateButton" type="button" class="primary">Generate manifest</button>
+              <button id="copyButton" type="button" class="ghost">Copy URL</button>
             </div>
             <div class="manifest-wrap">
               <input id="manifestUrl" class="manifest-field" readonly value="" />
@@ -932,8 +932,13 @@ def configure() -> str:
       }
       buildUrl();
     }
-    document.getElementById('lastfmUser').addEventListener('input', buildUrl);
-    window.addEventListener('DOMContentLoaded', buildUrl);
+    const usernameField = document.getElementById('lastfmUser');
+    const generateButton = document.getElementById('generateButton');
+    const copyButton = document.getElementById('copyButton');
+    usernameField.addEventListener('input', buildUrl);
+    generateButton.addEventListener('click', buildUrl);
+    copyButton.addEventListener('click', copyManifest);
+    buildUrl();
   </script>
 </body>
 </html>"""
