@@ -484,7 +484,7 @@ def _manifest_payload(lastfm_user: str | None = None) -> dict[str, Any]:
         "id": "community.lastfm.telegram",
         "version": "1.0.0",
         "name": "Flix-Music",
-        "description": "Flix-Music: Last.fm discovery catalog with Telegram playback links.",
+        "description": "Flix-Music: Last.fm discovery catalog with direct playback links.",
         "logo": f"{SETTINGS.public_base_url}/logo.png",
         "resources": ["catalog", "meta", "stream"],
         "types": ["movie"],
