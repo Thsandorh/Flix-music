@@ -15,15 +15,20 @@ def _prompt(label: str, default: str = "") -> str:
 
 
 async def _generate_session(api_id: int, api_hash: str, phone: str, code: str | None, password: str | None) -> str:
-    async with TelegramClient(StringSession(), api_id, api_hash) as client:
-        await client.send_code_request(phone)
-        login_code = code or _prompt("Telegram login code")
-        try:
-            await client.sign_in(phone=phone, code=login_code)
-        except SessionPasswordNeededError:
-            login_password = password or getpass("Telegram 2FA password: ")
-            await client.sign_in(password=login_password)
+    client = TelegramClient(StringSession(), api_id, api_hash)
+    await client.connect()
+    try:
+        if not await client.is_user_authorized():
+            await client.send_code_request(phone)
+            login_code = code or _prompt("Telegram login code")
+            try:
+                await client.sign_in(phone=phone, code=login_code)
+            except SessionPasswordNeededError:
+                login_password = password or getpass("Telegram 2FA password: ")
+                await client.sign_in(password=login_password)
         return client.session.save()
+    finally:
+        await client.disconnect()
 
 
 async def main() -> None:
