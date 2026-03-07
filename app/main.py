@@ -664,12 +664,12 @@ def _stream_payload(type: str, id: str) -> dict[str, Any]:
 
     track_ref = _decode_track_id(id)
     try:
-        _resolve_direct_stream_url(id)
+        direct_url = _resolve_direct_stream_url(id)
     except HTTPException as exc:
         logger.info("Skipping stream for %s - %s because direct resolution failed: %s", track_ref.get("artist"), track_ref.get("title"), exc.detail)
         return {"streams": []}
 
-    return {"streams": [_build_stream_item(_playback_url(id), track_ref)]}
+    return {"streams": [_build_stream_item(direct_url, track_ref)]}
 
 
 @app.get("/api/music/media", include_in_schema=False)
