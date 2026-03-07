@@ -4,6 +4,8 @@ import html
 import json
 import logging
 import os
+import shutil
+import subprocess
 import time
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
@@ -73,6 +75,7 @@ _ARTWORK_CACHE: dict[str, tuple[float, str | None]] = {}
 HARDCODED_TELEGRAM_MAPPING: dict[str, dict[str, str]] = {}
 LOGO_PATH = Path(__file__).resolve().parent / "assets" / "flix-music.png"
 LASTFM_PLACEHOLDER_MARKERS = ("2a96cbd8b46e442fc41c2b86b821562f",)
+SHORTENER_HOSTS = {"clck.ru", "www.clck.ru"}
 
 
 def _cache_key(params: dict[str, Any]) -> str:
@@ -611,20 +614,67 @@ def _playback_url(id: str) -> str:
     return f"{SETTINGS.public_base_url}/api/music/media?t={token}"
 
 
+def _extract_safe_shortlink_target(url: str) -> str:
+    candidate = str(url or "").strip()
+    if not candidate:
+        return ""
+
+    parsed = urlparse(candidate)
+    host = str(parsed.netloc or "").strip().lower()
+    if host == "sba.yandex.ru" and parsed.path.startswith("/redirect"):
+        redirected = str(dict(parse_qsl(parsed.query, keep_blank_values=True)).get("url") or "").strip()
+        return _extract_safe_shortlink_target(redirected)
+
+    path = str(parsed.path or "").strip().lower()
+    if host.endswith("code.run") and path.startswith("/download/"):
+        return candidate
+    return ""
+
+
+def _expand_shortlink_with_curl(url: str) -> str:
+    candidate = str(url or "").strip()
+    if not candidate:
+        return ""
+
+    curl_binary = shutil.which("curl") or shutil.which("curl.exe")
+    if not curl_binary:
+        return ""
+
+    try:
+        result = subprocess.run(
+            [curl_binary, "-I", "-L", "-s", "-o", os.devnull, "-w", "%{url_effective}", candidate],
+            capture_output=True,
+            text=True,
+            timeout=SETTINGS.timeout_s,
+            check=False,
+        )
+    except Exception:
+        return ""
+
+    returncode = getattr(result, "returncode", 1)
+    if returncode is None or int(returncode) != 0:
+        return ""
+
+    return _extract_safe_shortlink_target(str(getattr(result, "stdout", "") or "").strip())
+
+
 def _expand_direct_stream_url(url: str) -> str:
     normalized = str(url or "").strip()
     if not normalized:
         return normalized
 
+    redirected = _extract_safe_shortlink_target(normalized)
+    if redirected:
+        return redirected
+
     parsed = urlparse(normalized)
     host = str(parsed.netloc or "").strip().lower()
-    query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
-    if host == "sba.yandex.ru" and parsed.path.startswith("/redirect"):
-        redirected = str(query_params.get("url") or "").strip()
-        return redirected or normalized
-
-    if host not in {"clck.ru", "www.clck.ru"}:
+    if host not in SHORTENER_HOSTS:
         return normalized
+
+    curl_url = _expand_shortlink_with_curl(normalized)
+    if curl_url:
+        return curl_url
 
     response = None
     try:
@@ -638,13 +688,8 @@ def _expand_direct_stream_url(url: str) -> str:
         location = str((getattr(response, "headers", {}) or {}).get("Location") or "").strip()
         if not location:
             return normalized
-        location_parsed = urlparse(location)
-        location_params = dict(parse_qsl(location_parsed.query, keep_blank_values=True))
-        redirected = str(location_params.get("url") or location).strip()
-        redirected_parsed = urlparse(redirected)
-        redirected_host = str(redirected_parsed.netloc or "").strip().lower()
-        redirected_path = str(redirected_parsed.path or "").strip().lower()
-        if redirected_host.endswith("code.run") and redirected_path.startswith("/download/"):
+        redirected = _extract_safe_shortlink_target(location)
+        if redirected:
             return redirected
         return normalized
     except requests.RequestException:

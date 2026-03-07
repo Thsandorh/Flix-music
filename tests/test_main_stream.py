@@ -75,6 +75,8 @@ def test_stream_uses_cached_mtproto_result(monkeypatch):
     assert payload["streams"][0]["behaviorHints"]["notWebReady"] is True
 
 def test_expand_direct_stream_url_resolves_shortlink(monkeypatch):
+    monkeypatch.setattr(main, "_expand_shortlink_with_curl", lambda url: "")
+
     class FakeResponse:
         headers = {
             "Location": "https://sba.yandex.ru/redirect?url=https%3A%2F%2Fsite--linkfilesbot--gb24qxlnkkt9.code.run%2Fdownload%2F1727945"
@@ -96,6 +98,8 @@ def test_expand_direct_stream_url_resolves_shortlink(monkeypatch):
 
 
 def test_expand_direct_stream_url_keeps_shortlink_when_target_is_not_download(monkeypatch):
+    monkeypatch.setattr(main, "_expand_shortlink_with_curl", lambda url: "")
+
     class FakeResponse:
         headers = {
             "Location": "https://clck.ru/showcaptcha?x=1"
@@ -111,6 +115,41 @@ def test_expand_direct_stream_url_keeps_shortlink_when_target_is_not_download(mo
     monkeypatch.setattr(main, "_session", FakeSession())
 
     assert main._expand_direct_stream_url("https://clck.ru/test") == "https://clck.ru/test"
+
+
+def test_expand_shortlink_with_curl_returns_safe_download(monkeypatch):
+    class FakeCompletedProcess:
+        returncode = 0
+        stdout = "https://site--linkfilesbot--gb24qxlnkkt9.code.run/download/1727945"
+
+    monkeypatch.setattr(main.shutil, "which", lambda name: "curl.exe")
+    monkeypatch.setattr(main.subprocess, "run", lambda *args, **kwargs: FakeCompletedProcess())
+
+    assert main._expand_shortlink_with_curl("https://clck.ru/test") == "https://site--linkfilesbot--gb24qxlnkkt9.code.run/download/1727945"
+
+
+def test_expand_direct_stream_url_ignores_bad_curl_target_and_uses_safe_header_fallback(monkeypatch):
+    class FakeCompletedProcess:
+        returncode = 0
+        stdout = "https://clck.ru/showcaptcha?x=1"
+
+    class FakeResponse:
+        headers = {
+            "Location": "https://sba.yandex.ru/redirect?url=https%3A%2F%2Fsite--linkfilesbot--gb24qxlnkkt9.code.run%2Fdownload%2F1727945"
+        }
+
+        def close(self):
+            return None
+
+    class FakeSession:
+        def get(self, url, allow_redirects, stream, headers, timeout):
+            return FakeResponse()
+
+    monkeypatch.setattr(main.shutil, "which", lambda name: "curl.exe")
+    monkeypatch.setattr(main.subprocess, "run", lambda *args, **kwargs: FakeCompletedProcess())
+    monkeypatch.setattr(main, "_session", FakeSession())
+
+    assert main._expand_direct_stream_url("https://clck.ru/test") == "https://site--linkfilesbot--gb24qxlnkkt9.code.run/download/1727945"
 
 
 def test_stream_expands_shortlink_to_final_media_url(monkeypatch):
