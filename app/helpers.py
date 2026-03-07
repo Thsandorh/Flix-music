@@ -69,6 +69,17 @@ def build_telegram_search_url(query: str, template: str | None = None) -> str:
     return pattern.format(query=query, query_encoded=quote_plus(query))
 
 
+
+
+def build_direct_download_bot_url(query: str, template: str | None = None) -> str:
+    """Build direct-download bot URL from a plain text query."""
+    pattern = template if template is not None else os.getenv(
+        "DIRECT_DOWNLOAD_BOT_URL_TEMPLATE",
+        "https://t.me/LinkFilesBot?start={query_encoded}",
+    )
+    return pattern.format(query=query, query_encoded=quote_plus(query))
+
+
 def has_telegram_app_credentials() -> bool:
     """True when my.telegram.org app credentials are configured."""
     return bool(os.getenv("TELEGRAM_API_ID")) and bool(os.getenv("TELEGRAM_API_HASH"))

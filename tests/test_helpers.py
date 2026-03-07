@@ -1,6 +1,7 @@
 import pytest
 
 from app.helpers import (
+    build_direct_download_bot_url,
     build_linkfilesbot_url,
     build_recording_search_query,
     build_telegram_search_url,
@@ -63,3 +64,8 @@ def test_has_telegram_app_credentials(monkeypatch):
     monkeypatch.setenv("TELEGRAM_API_ID", "123")
     monkeypatch.setenv("TELEGRAM_API_HASH", "abc")
     assert has_telegram_app_credentials() is True
+
+
+def test_build_direct_download_bot_url_encodes_query():
+    url = build_direct_download_bot_url("Metallica Nothing Else Matters")
+    assert "Metallica+Nothing+Else+Matters" in url
