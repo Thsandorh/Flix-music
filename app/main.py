@@ -480,7 +480,7 @@ def _stream_payload(type: str, id: str) -> dict[str, Any]:
 
 @app.get("/")
 def root() -> RedirectResponse:
-    return RedirectResponse(url="/manifest.json", status_code=307)
+    return RedirectResponse(url="/configure", status_code=307)
 
 
 @app.get("/configure", response_class=HTMLResponse)
