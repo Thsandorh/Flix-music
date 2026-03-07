@@ -8,6 +8,7 @@ from app.mtproto import (
     _extract_urls_from_message,
     _extract_urls_from_text,
     _first_non_telegram_url,
+    _first_result_button_coords,
     _first_url_from_messages,
     _is_telegram_url,
     _select_search_result_candidate,
@@ -15,20 +16,51 @@ from app.mtproto import (
 )
 
 
+class _FakeMessage:
+    def __init__(
+        self,
+        text=None,
+        *,
+        id=1,
+        buttons=None,
+        entities=None,
+        reply_markup=None,
+        file_name=None,
+        mime_type=None,
+        file_size=0,
+        has_document=False,
+        on_click=None,
+    ):
+        self.id = id
+        self.raw_text = text
+        self.text = text
+        self.message = text
+        self.buttons = buttons
+        self.entities = entities
+        self.reply_markup = reply_markup
+        self._on_click = on_click
+        self.file = None
+        self.document = None
+        if file_name or mime_type or file_size or has_document:
+            self.file = SimpleNamespace(name=file_name, mime_type=mime_type, size=file_size)
+            self.document = object()
+
+    async def click(self, row, col):
+        if self._on_click is not None:
+            return await self._on_click(row, col)
+        return None
+
+
 def _msg(text=None, buttons=None, entities=None, reply_markup=None, id=1):
-    return SimpleNamespace(
-        id=id,
-        raw_text=text,
-        text=text,
-        message=text,
-        buttons=buttons,
-        entities=entities,
-        reply_markup=reply_markup,
-    )
+    return _FakeMessage(text, id=id, buttons=buttons, entities=entities, reply_markup=reply_markup)
 
 
 def _button(url):
     return SimpleNamespace(url=url)
+
+
+def _callback_button(text, data):
+    return SimpleNamespace(text=text, data=data, url=None)
 
 
 def test_extract_urls_from_text_multiple():
@@ -77,6 +109,17 @@ def test_select_search_result_candidate_prefers_message_link_over_search_bot_sta
     assert _select_search_result_candidate(messages, search_bot="vkmusic_bot") == "https://t.me/c/123/456"
 
 
+def test_first_result_button_coords_selects_numbered_callback_button():
+    message = _msg(
+        "results",
+        buttons=[
+            [_callback_button("1", b"a:123:1"), _callback_button("2", b"a:456:1")],
+            [_callback_button("??", b"ss:8")],
+        ],
+    )
+    assert _first_result_button_coords(message) == (0, 0)
+
+
 def test_is_telegram_url():
     assert _is_telegram_url("https://t.me/abc") is True
     assert _is_telegram_url("https://telegram.me/abc") is True
@@ -84,12 +127,16 @@ def test_is_telegram_url():
 
 
 class _FakeClient:
-    def __init__(self, search_messages=None, direct_messages=None, authorized=True):
+    def __init__(self, search_messages=None, search_followups=None, direct_messages=None, authorized=True):
         self.search_messages = list(search_messages or [])
+        self.search_followups = list(search_followups or [])
         self.direct_messages = list(direct_messages or [])
         self.sent = []
+        self.forwarded = []
         self.authorized = authorized
         self.connected = False
+        self.search_clicked = False
+        self.direct_activated = False
 
     async def connect(self):
         self.connected = True
@@ -104,14 +151,24 @@ class _FakeClient:
 
     async def send_message(self, peer, message):
         self.sent.append((peer, message))
+        if peer == 'LinkFilesBot':
+            self.direct_activated = True
         return SimpleNamespace(id=len(self.sent) * 100)
+
+    async def forward_messages(self, peer, message):
+        self.forwarded.append((peer, getattr(message, 'id', None)))
+        if peer == 'LinkFilesBot':
+            self.direct_activated = True
+        return SimpleNamespace(id=900 + len(self.forwarded))
 
     async def get_messages(self, peer, limit=20, min_id=0):
         if peer == "vkmusic_bot":
-            return self.search_messages
-        if peer == "LinkFilesBot":
-            return self.direct_messages
-        return []
+            rows = self.search_messages + (self.search_followups if self.search_clicked else [])
+        elif peer == "LinkFilesBot":
+            rows = self.direct_messages if self.direct_activated else []
+        else:
+            rows = []
+        return [row for row in rows if int(getattr(row, 'id', 0) or 0) > int(min_id or 0)][:limit]
 
 
 class _FakeTelegramClientFactory:
@@ -131,6 +188,11 @@ class _FakeStringSession:
 
 async def _no_sleep(_seconds):
     return None
+
+
+async def _mark_clicked(client, _row, _col):
+    client.search_clicked = True
+    return SimpleNamespace()
 
 
 def test_resolve_direct_url_from_bots_prefers_non_bot_result_link(monkeypatch):
@@ -158,7 +220,47 @@ def test_resolve_direct_url_from_bots_prefers_non_bot_result_link(monkeypatch):
         ("vkmusic_bot", "Metallica Nothing Else Matters"),
         ("LinkFilesBot", "https://t.me/c/123/456"),
     ]
+    assert client.forwarded == []
     assert isinstance(calls[0][0], _FakeStringSession)
+
+
+def test_resolve_direct_url_from_bots_clicks_callback_result_and_forwards_document(monkeypatch):
+    client = _FakeClient(
+        search_messages=[
+            _FakeMessage(
+                "results",
+                id=101,
+                buttons=[[_callback_button("1", b"a:123:1")]],
+                on_click=lambda row, col: _mark_clicked(client, row, col),
+            )
+        ],
+        search_followups=[
+            _FakeMessage(
+                "Find music",
+                id=102,
+                file_name="song.mp3",
+                mime_type="audio/mpeg",
+                file_size=123,
+                has_document=True,
+            )
+        ],
+        direct_messages=[_msg("Download: https://clck.ru/direct", id=201)],
+    )
+    calls = []
+    monkeypatch.setenv("TELEGRAM_API_ID", "123")
+    monkeypatch.setenv("TELEGRAM_API_HASH", "hash")
+    monkeypatch.setenv("TELEGRAM_STRING_SESSION", "session")
+    monkeypatch.delenv("TELEGRAM_SESSION_PATH", raising=False)
+    monkeypatch.setenv("MT_PROTO_WAIT_SECONDS", "0")
+    monkeypatch.setattr(mtproto.asyncio, "sleep", _no_sleep)
+    monkeypatch.setitem(sys.modules, "telethon", SimpleNamespace(TelegramClient=_FakeTelegramClientFactory(client, calls)))
+    monkeypatch.setitem(sys.modules, "telethon.sessions", SimpleNamespace(StringSession=_FakeStringSession))
+
+    result = asyncio.run(resolve_direct_url_from_bots("Metallica Nothing Else Matters"))
+
+    assert result == "https://clck.ru/direct"
+    assert client.sent == [("vkmusic_bot", "Metallica Nothing Else Matters")]
+    assert client.forwarded == [("LinkFilesBot", 102)]
 
 
 def test_resolve_direct_url_from_bots_skips_search_for_message_url(monkeypatch):

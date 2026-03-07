@@ -119,10 +119,45 @@ def _select_search_result_candidate(messages: Iterable[Any], *, search_bot: str)
     return None
 
 
+def _first_document_message(messages: Iterable[Any]) -> Any | None:
+    for message in messages:
+        if getattr(message, "document", None) or getattr(message, "file", None):
+            return message
+    return None
+
+
+def _first_result_button_coords(message: Any) -> tuple[int, int] | None:
+    rows = getattr(message, "buttons", None) or []
+    for row_index, row in enumerate(rows):
+        for col_index, button in enumerate(row):
+            text = str(getattr(button, "text", "") or "").strip()
+            data = getattr(button, "data", None)
+            data_text = data.decode("utf-8", errors="ignore") if isinstance(data, (bytes, bytearray)) else str(data or "")
+            if text.isdigit() and data_text.startswith("a:"):
+                return row_index, col_index
+    return None
+
+
+async def _latest_message_id(client: Any, peer: str) -> int:
+    messages = await client.get_messages(peer, limit=1)
+    if not messages:
+        return 0
+    return max(0, int(getattr(messages[0], "id", 0) or 0))
+
+
 async def _collect_new_messages(client: Any, peer: str, min_id: int, *, limit: int, wait_seconds: float) -> list[Any]:
-    await asyncio.sleep(wait_seconds)
-    messages = await client.get_messages(peer, limit=limit, min_id=min_id)
-    return sorted(messages, key=lambda m: m.id)
+    deadline = asyncio.get_running_loop().time() + max(0.0, float(wait_seconds or 0.0))
+    poll_seconds = 0.5
+    collected: dict[int, Any] = {}
+    while True:
+        messages = await client.get_messages(peer, limit=limit, min_id=min_id)
+        for message in messages:
+            message_id = int(getattr(message, 'id', 0) or 0)
+            if message_id > int(min_id or 0):
+                collected[message_id] = message
+        if asyncio.get_running_loop().time() >= deadline:
+            return [collected[key] for key in sorted(collected)]
+        await asyncio.sleep(min(poll_seconds, max(0.0, deadline - asyncio.get_running_loop().time())))
 
 
 async def _authorized_client(api_id: int, api_hash: str, session: str, session_path: str):
@@ -152,6 +187,40 @@ async def _authorized_client(api_id: int, api_hash: str, session: str, session_p
     return client
 
 
+async def _resolve_search_result(client: Any, search_bot: str, query: str, wait_seconds: float) -> tuple[str | None, Any | None]:
+    sent_to_search = await client.send_message(search_bot, query)
+    search_messages = await _collect_new_messages(
+        client,
+        search_bot,
+        sent_to_search.id,
+        limit=20,
+        wait_seconds=wait_seconds,
+    )
+
+    candidate_url = _select_search_result_candidate(search_messages, search_bot=search_bot)
+    if candidate_url:
+        return candidate_url, None
+
+    latest_seen_id = max([sent_to_search.id, *[int(getattr(message, "id", 0) or 0) for message in search_messages]], default=sent_to_search.id)
+    for message in search_messages:
+        coords = _first_result_button_coords(message)
+        if not coords:
+            continue
+        await message.click(*coords)
+        followup_messages = await _collect_new_messages(
+            client,
+            search_bot,
+            latest_seen_id,
+            limit=10,
+            wait_seconds=wait_seconds,
+        )
+        document_message = _first_document_message(followup_messages)
+        if document_message:
+            return None, document_message
+
+    return None, None
+
+
 async def resolve_direct_url_from_bots(query: str) -> str:
     api_id_raw = os.getenv("TELEGRAM_API_ID", "").strip()
     api_hash = os.getenv("TELEGRAM_API_HASH", "").strip()
@@ -164,31 +233,28 @@ async def resolve_direct_url_from_bots(query: str) -> str:
     api_id = int(api_id_raw)
     search_bot = os.getenv("VKMUSIC_BOT_USERNAME", "vkmusic_bot").lstrip("@")
     direct_bot = os.getenv("DIRECT_DOWNLOAD_BOT_USERNAME", "LinkFilesBot").lstrip("@")
-    wait_seconds = float(os.getenv("MT_PROTO_WAIT_SECONDS", "2.5"))
+    wait_seconds = float(os.getenv("MT_PROTO_WAIT_SECONDS", "6"))
 
     client = await _authorized_client(api_id, api_hash, session, session_path)
 
     try:
         candidate = str(query or "").strip()
+        document_message = None
         if not _is_telegram_url(candidate):
-            sent_to_search = await client.send_message(search_bot, candidate)
-            search_messages = await _collect_new_messages(
-                client,
-                search_bot,
-                sent_to_search.id,
-                limit=20,
-                wait_seconds=wait_seconds,
-            )
+            candidate, document_message = await _resolve_search_result(client, search_bot, candidate, wait_seconds)
+            if not candidate and document_message is None:
+                raise RuntimeError("No result link or document found in search bot response")
 
-            candidate = _select_search_result_candidate(search_messages, search_bot=search_bot) or ""
-            if not candidate:
-                raise RuntimeError("No result link found in search bot response")
+        before_direct_id = await _latest_message_id(client, direct_bot)
+        if document_message is not None:
+            await client.forward_messages(direct_bot, document_message)
+        else:
+            await client.send_message(direct_bot, candidate)
 
-        sent_to_direct = await client.send_message(direct_bot, candidate)
         direct_messages = await _collect_new_messages(
             client,
             direct_bot,
-            sent_to_direct.id,
+            before_direct_id,
             limit=20,
             wait_seconds=wait_seconds,
         )
