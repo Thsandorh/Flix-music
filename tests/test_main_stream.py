@@ -75,41 +75,15 @@ def test_stream_uses_cached_mtproto_result(monkeypatch):
     assert payload["streams"][0]["behaviorHints"]["notWebReady"] is True
 
 def test_expand_direct_stream_url_resolves_shortlink(monkeypatch):
-    monkeypatch.setattr(main, "_expand_shortlink_with_curl", lambda url: "")
-
-    class FakeResponse:
-        def geturl(self):
-            return "https://sba.yandex.ru/redirect?url=https%3A%2F%2Fsite--linkfilesbot--gb24qxlnkkt9.code.run%2Fdownload%2F1727945"
-
-        def close(self):
-            return None
-
-    class FakeOpener:
-        def open(self, request, timeout):
-            assert request.full_url == "https://clck.ru/test"
-            return FakeResponse()
-
-    monkeypatch.setattr(main, "build_opener", lambda: FakeOpener())
+    monkeypatch.setattr(main, "_resolve_shortlink_once", lambda url, proxy_url="": "https://site--linkfilesbot--gb24qxlnkkt9.code.run/download/1727945" if not proxy_url else "")
 
     assert main._expand_direct_stream_url("https://clck.ru/test") == "https://site--linkfilesbot--gb24qxlnkkt9.code.run/download/1727945"
 
 
 
 def test_expand_direct_stream_url_keeps_shortlink_when_target_stays_shortener(monkeypatch):
-    monkeypatch.setattr(main, "_expand_shortlink_with_curl", lambda url: "")
-
-    class FakeResponse:
-        def geturl(self):
-            return "https://clck.ru/showcaptcha?x=1"
-
-        def close(self):
-            return None
-
-    class FakeOpener:
-        def open(self, request, timeout):
-            return FakeResponse()
-
-    monkeypatch.setattr(main, "build_opener", lambda: FakeOpener())
+    monkeypatch.setattr(main, "_resolve_shortlink_once", lambda url, proxy_url="": "")
+    monkeypatch.setattr(main, "_acquire_shortlink_proxy", lambda: None)
 
     assert main._expand_direct_stream_url("https://clck.ru/test") == "https://clck.ru/test"
 
@@ -128,35 +102,47 @@ def test_expand_shortlink_with_curl_returns_non_shortener(monkeypatch):
 
 
 def test_expand_direct_stream_url_accepts_non_shortener_from_curl(monkeypatch):
-    monkeypatch.setattr(main, "_expand_shortlink_with_curl", lambda url: "https://cdn.example/final.mp3")
+    monkeypatch.setattr(main, "_resolve_shortlink_once", lambda url, proxy_url="": "https://cdn.example/final.mp3" if not proxy_url else "")
 
     assert main._expand_direct_stream_url("https://clck.ru/test") == "https://cdn.example/final.mp3"
 
 
 
 def test_expand_direct_stream_url_rejects_blocked_curl_target_and_uses_fallback(monkeypatch):
-    monkeypatch.setattr(main, "_expand_shortlink_with_curl", lambda url: "https://share.flocktory.com/exchange/login?ssid=7010&bid=16326")
+    attempts = []
 
-    class FakeResponse:
-        def geturl(self):
-            return "https://cdn.example/final.mp3"
+    def fake_resolve(url, proxy_url=""):
+        attempts.append(proxy_url)
+        if not proxy_url:
+            return ""
+        return "https://cdn.example/final.mp3"
 
-        def close(self):
-            return None
-
-    class FakeOpener:
-        def open(self, request, timeout):
-            return FakeResponse()
-
-    monkeypatch.setattr(main, "build_opener", lambda: FakeOpener())
+    proxy = main.ShortlinkProxyEndpoint(proxy_id="proxy-1", proxy_url="http://proxy.example:8080", label="proxy")
+    monkeypatch.setattr(main, "_resolve_shortlink_once", fake_resolve)
+    monkeypatch.setattr(main, "_acquire_shortlink_proxy", lambda: proxy)
+    monkeypatch.setattr(main, "_shortlink_proxy_max_attempts", lambda: 1)
 
     assert main._expand_direct_stream_url("https://clck.ru/test") == "https://cdn.example/final.mp3"
+    assert attempts == ["", "http://proxy.example:8080"]
 
 
 
 def test_extract_shortlink_target_yandex_redirect():
     url = "https://sba.yandex.ru/redirect?url=https%3A%2F%2Fsite--linkfilesbot--gb24qxlnkkt9.code.run%2Fdownload%2F1727896"
     assert main._extract_shortlink_target(url) == "https://site--linkfilesbot--gb24qxlnkkt9.code.run/download/1727896"
+
+
+def test_expand_direct_stream_url_marks_proxy_failure(monkeypatch):
+    failures = []
+    proxy = main.ShortlinkProxyEndpoint(proxy_id="proxy-1", proxy_url="http://proxy.example:8080", label="proxy")
+
+    monkeypatch.setattr(main, "_resolve_shortlink_once", lambda url, proxy_url="": "")
+    monkeypatch.setattr(main, "_acquire_shortlink_proxy", lambda: proxy)
+    monkeypatch.setattr(main, "_shortlink_proxy_max_attempts", lambda: 1)
+    monkeypatch.setattr(main, "_mark_shortlink_proxy_failure", lambda endpoint: failures.append(endpoint.proxy_id))
+
+    assert main._expand_direct_stream_url("https://clck.ru/test") == "https://clck.ru/test"
+    assert failures == ["proxy-1"]
 
 
 def test_stream_expands_shortlink_to_final_media_url(monkeypatch):

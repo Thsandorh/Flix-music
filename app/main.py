@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
@@ -87,6 +88,202 @@ BLOCKED_SHORTLINK_TARGET_PATH_FRAGMENTS = (
     "/showcaptcha",
     "/exchange/login",
 )
+_SHORTLINK_PROXY_LOCK = threading.Lock()
+_SHORTLINK_PROXY_CACHE: dict[str, Any] = {
+    "expires_at": 0.0,
+    "entries": [],
+    "rr_index": 0,
+    "state": {},
+}
+
+
+@dataclass(frozen=True)
+class ShortlinkProxyEndpoint:
+    proxy_id: str
+    proxy_url: str
+    label: str
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = str(os.environ.get(name, "true" if default else "false") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _env_int(names: str | tuple[str, ...], default: int, minimum: int = 0) -> int:
+    candidates = (names,) if isinstance(names, str) else tuple(names)
+    for name in candidates:
+        raw = os.environ.get(name)
+        if raw is None:
+            continue
+        try:
+            return max(int(minimum), int(raw))
+        except Exception:
+            continue
+    return max(int(minimum), int(default))
+
+
+def _env_str(names: str | tuple[str, ...], default: str = "") -> str:
+    candidates = (names,) if isinstance(names, str) else tuple(names)
+    for name in candidates:
+        raw = str(os.environ.get(name, "") or "").strip()
+        if raw:
+            return raw
+    return str(default or "").strip()
+
+
+def _shortlink_proxy_enabled() -> bool:
+    if _env_bool("SHORTLINK_PROXY_ENABLED", False):
+        return True
+    return _env_bool("PROVIDER_PROXY_POOL_ENABLED", False)
+
+
+def _shortlink_proxy_scheme() -> str:
+    scheme = _env_str(("SHORTLINK_PROXY_SCHEME", "PROVIDER_PROXY_SCHEME"), "http").lower()
+    return scheme if scheme in {"http", "https", "socks5"} else "http"
+
+
+def _shortlink_proxy_max_attempts() -> int:
+    return _env_int("SHORTLINK_PROXY_MAX_ATTEMPTS", 3, minimum=1)
+
+
+def _shortlink_proxy_fail_streak_threshold() -> int:
+    return _env_int(("SHORTLINK_PROXY_FAIL_STREAK", "PROVIDER_PROXY_FAIL_STREAK"), 2, minimum=1)
+
+
+def _shortlink_proxy_cooldown_seconds() -> int:
+    return _env_int(("SHORTLINK_PROXY_COOLDOWN_SECONDS", "PROVIDER_PROXY_COOLDOWN_SECONDS"), 180, minimum=1)
+
+
+def _shortlink_proxy_refresh_seconds() -> int:
+    return _env_int("SHORTLINK_PROXY_REFRESH_SECONDS", 900, minimum=60)
+
+
+def _build_proxy_url_from_fields(host: Any, port: Any, username: Any, password: Any, scheme: str) -> str:
+    host_s = str(host or "").strip()
+    port_s = str(port or "").strip()
+    if not host_s or not port_s:
+        return ""
+    user_s = quote(str(username or "").strip(), safe="")
+    pass_s = quote(str(password or "").strip(), safe="")
+    if user_s:
+        return f"{scheme}://{user_s}:{pass_s}@{host_s}:{port_s}"
+    return f"{scheme}://{host_s}:{port_s}"
+
+
+def _fetch_shortlink_proxy_entries() -> list[ShortlinkProxyEndpoint]:
+    if not _shortlink_proxy_enabled():
+        return []
+
+    token = _env_str(("SHORTLINK_PROXY_WEBSHARE_TOKEN", "PROVIDER_PROXY_WEBSHARE_TOKEN", "WEBSHARE_API_TOKEN"), "")
+    if not token:
+        return []
+
+    api_url = _env_str(("SHORTLINK_PROXY_WEBSHARE_API_URL", "PROVIDER_PROXY_WEBSHARE_API_URL"), "https://proxy.webshare.io/api/v2/proxy/list/")
+    page_size = _env_int(("SHORTLINK_PROXY_WEBSHARE_PAGE_SIZE", "PROVIDER_PROXY_WEBSHARE_PAGE_SIZE"), 100, minimum=1)
+    max_results = _env_int(("SHORTLINK_PROXY_WEBSHARE_MAX_RESULTS", "PROVIDER_PROXY_WEBSHARE_MAX_RESULTS"), 100, minimum=1)
+    mode = _env_str(("SHORTLINK_PROXY_WEBSHARE_MODE", "PROVIDER_PROXY_WEBSHARE_MODE"), "direct") or "direct"
+    valid_only = _env_bool("SHORTLINK_PROXY_WEBSHARE_VALID_ONLY", True)
+    scheme = _shortlink_proxy_scheme()
+
+    entries: list[ShortlinkProxyEndpoint] = []
+    seen: set[str] = set()
+    next_url = api_url
+    headers = {"Authorization": f"Token {token}"}
+
+    while next_url and len(entries) < max_results:
+        params = {"mode": mode, "page_size": page_size} if "?" not in next_url else None
+        response = requests.get(next_url, headers=headers, params=params, timeout=min(20, SETTINGS.timeout_s + 5))
+        response.raise_for_status()
+        payload = response.json() or {}
+        for row in list(payload.get("results") or []):
+            if len(entries) >= max_results:
+                break
+            if valid_only and not bool(row.get("valid", True)):
+                continue
+            proxy_url = _build_proxy_url_from_fields(
+                host=row.get("proxy_address"),
+                port=row.get("port"),
+                username=row.get("username"),
+                password=row.get("password"),
+                scheme=scheme,
+            )
+            if not proxy_url or proxy_url in seen:
+                continue
+            seen.add(proxy_url)
+            row_id = str(row.get("id") or f"proxy-{len(entries) + 1}").strip()
+            label = f"{row.get('proxy_address')}:{row.get('port')}"
+            entries.append(ShortlinkProxyEndpoint(proxy_id=row_id, proxy_url=proxy_url, label=label))
+        next_url = str(payload.get("next") or "").strip() or None
+
+    return entries
+
+
+def _load_shortlink_proxy_entries() -> list[ShortlinkProxyEndpoint]:
+    now = time.monotonic()
+    with _SHORTLINK_PROXY_LOCK:
+        expires_at = float(_SHORTLINK_PROXY_CACHE.get("expires_at") or 0.0)
+        cached_entries = list(_SHORTLINK_PROXY_CACHE.get("entries") or [])
+        if cached_entries and expires_at > now:
+            return cached_entries
+
+    try:
+        entries = _fetch_shortlink_proxy_entries()
+    except Exception as exc:
+        logger.warning("Shortlink proxy fetch failed: %s", exc)
+        entries = []
+
+    with _SHORTLINK_PROXY_LOCK:
+        state = dict(_SHORTLINK_PROXY_CACHE.get("state") or {})
+        active_ids = {entry.proxy_id for entry in entries}
+        state = {key: value for key, value in state.items() if key in active_ids}
+        _SHORTLINK_PROXY_CACHE["entries"] = list(entries)
+        _SHORTLINK_PROXY_CACHE["expires_at"] = now + _shortlink_proxy_refresh_seconds()
+        _SHORTLINK_PROXY_CACHE["state"] = state
+        if entries:
+            _SHORTLINK_PROXY_CACHE["rr_index"] = int(_SHORTLINK_PROXY_CACHE.get("rr_index") or 0) % len(entries)
+        else:
+            _SHORTLINK_PROXY_CACHE["rr_index"] = 0
+        return list(entries)
+
+
+def _acquire_shortlink_proxy() -> ShortlinkProxyEndpoint | None:
+    entries = _load_shortlink_proxy_entries()
+    if not entries:
+        return None
+
+    now = time.monotonic()
+    with _SHORTLINK_PROXY_LOCK:
+        state = _SHORTLINK_PROXY_CACHE.setdefault("state", {})
+        start = int(_SHORTLINK_PROXY_CACHE.get("rr_index") or 0) % len(entries)
+        for offset in range(len(entries)):
+            idx = (start + offset) % len(entries)
+            entry = entries[idx]
+            entry_state = state.setdefault(entry.proxy_id, {"fail_streak": 0, "cooldown_until": 0.0})
+            if float(entry_state.get("cooldown_until") or 0.0) > now:
+                continue
+            _SHORTLINK_PROXY_CACHE["rr_index"] = (idx + 1) % len(entries)
+            return entry
+    return None
+
+
+def _mark_shortlink_proxy_success(entry: ShortlinkProxyEndpoint | None) -> None:
+    if not isinstance(entry, ShortlinkProxyEndpoint):
+        return
+    with _SHORTLINK_PROXY_LOCK:
+        state = _SHORTLINK_PROXY_CACHE.setdefault("state", {}).setdefault(entry.proxy_id, {"fail_streak": 0, "cooldown_until": 0.0})
+        state["fail_streak"] = 0
+        state["cooldown_until"] = 0.0
+
+
+def _mark_shortlink_proxy_failure(entry: ShortlinkProxyEndpoint | None) -> None:
+    if not isinstance(entry, ShortlinkProxyEndpoint):
+        return
+    with _SHORTLINK_PROXY_LOCK:
+        state = _SHORTLINK_PROXY_CACHE.setdefault("state", {}).setdefault(entry.proxy_id, {"fail_streak": 0, "cooldown_until": 0.0})
+        state["fail_streak"] = int(state.get("fail_streak") or 0) + 1
+        if state["fail_streak"] >= _shortlink_proxy_fail_streak_threshold():
+            state["fail_streak"] = 0
+            state["cooldown_until"] = time.monotonic() + _shortlink_proxy_cooldown_seconds()
 
 
 def _cache_key(params: dict[str, Any]) -> str:
@@ -660,7 +857,18 @@ def _is_blocked_shortlink_target(url: str) -> bool:
     return False
 
 
-def _expand_shortlink_with_curl(url: str) -> str:
+def _is_acceptable_shortlink_target(url: str) -> bool:
+    candidate = str(url or "").strip()
+    if not candidate:
+        return False
+    if _should_resolve_shortened_url(candidate):
+        return False
+    if _is_blocked_shortlink_target(candidate):
+        return False
+    return True
+
+
+def _expand_shortlink_with_curl(url: str, proxy_url: str = "") -> str:
     candidate = str(url or "").strip()
     if not candidate:
         return ""
@@ -669,9 +877,14 @@ def _expand_shortlink_with_curl(url: str) -> str:
     if not curl_binary:
         return ""
 
+    command = [curl_binary, "-I", "-L", "-s", "-o", os.devnull, "-w", "%{url_effective}"]
+    if proxy_url:
+        command.extend(["--proxy", proxy_url])
+    command.append(candidate)
+
     try:
         result = subprocess.run(
-            [curl_binary, "-I", "-L", "-s", "-o", os.devnull, "-w", "%{url_effective}", candidate],
+            command,
             capture_output=True,
             text=True,
             timeout=SETTINGS.timeout_s,
@@ -687,25 +900,41 @@ def _expand_shortlink_with_curl(url: str) -> str:
     return str(getattr(result, "stdout", "") or "").strip()
 
 
-def _expand_direct_stream_url(url: str) -> str:
+def _resolve_shortlink_once(url: str, proxy_url: str = "") -> str:
     normalized = str(url or "").strip()
     if not normalized:
-        return normalized
+        return ""
 
-    if not _should_resolve_shortened_url(normalized):
-        return normalized
-
-    curl_url = str(_expand_shortlink_with_curl(normalized) or "").strip()
+    curl_url = str(_expand_shortlink_with_curl(normalized, proxy_url=proxy_url) or "").strip()
     if curl_url:
         curl_url = _extract_shortlink_target(curl_url)
-        if curl_url and not _should_resolve_shortened_url(curl_url) and not _is_blocked_shortlink_target(curl_url):
+        if _is_acceptable_shortlink_target(curl_url):
             return curl_url
 
-    opener = build_opener()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "*/*",
     }
+    if proxy_url:
+        proxies = {"http": proxy_url, "https": proxy_url}
+        for method in ("HEAD", "GET"):
+            try:
+                response = _session.request(method, normalized, headers=headers, timeout=SETTINGS.timeout_s, allow_redirects=True, proxies=proxies)
+                try:
+                    final_url = str(getattr(response, "url", "") or normalized).strip()
+                finally:
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
+                final_url = _extract_shortlink_target(final_url)
+                if _is_acceptable_shortlink_target(final_url):
+                    return final_url
+            except requests.RequestException:
+                continue
+        return ""
+
+    opener = build_opener()
     for method in ("HEAD", "GET"):
         try:
             request = Request(normalized, headers=headers, method=method)
@@ -718,10 +947,38 @@ def _expand_direct_stream_url(url: str) -> str:
                 except Exception:
                     pass
             final_url = _extract_shortlink_target(final_url)
-            if final_url and not _should_resolve_shortened_url(final_url) and not _is_blocked_shortlink_target(final_url):
+            if _is_acceptable_shortlink_target(final_url):
                 return final_url
         except Exception:
             continue
+    return ""
+
+
+def _expand_direct_stream_url(url: str) -> str:
+    normalized = str(url or "").strip()
+    if not normalized:
+        return normalized
+
+    if not _should_resolve_shortened_url(normalized):
+        return normalized
+
+    direct_url = _resolve_shortlink_once(normalized)
+    if direct_url:
+        return direct_url
+
+    attempted_proxy_ids: set[str] = set()
+    for _ in range(_shortlink_proxy_max_attempts()):
+        endpoint = _acquire_shortlink_proxy()
+        if not isinstance(endpoint, ShortlinkProxyEndpoint):
+            break
+        if endpoint.proxy_id in attempted_proxy_ids:
+            break
+        attempted_proxy_ids.add(endpoint.proxy_id)
+        proxied_url = _resolve_shortlink_once(normalized, proxy_url=endpoint.proxy_url)
+        if proxied_url:
+            _mark_shortlink_proxy_success(endpoint)
+            return proxied_url
+        _mark_shortlink_proxy_failure(endpoint)
 
     return normalized
 
