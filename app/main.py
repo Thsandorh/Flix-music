@@ -524,7 +524,7 @@ def configure() -> str:
         <h2>Community</h2>
         <p class="muted">Join the Discord or support the project on Ko-fi.</p>
         <div class="links">
-          <a href="https://discord.com/invite/jfVJkxD2" target="_blank" rel="noreferrer">Discord</a>
+          <a href="https://discord.gg/GnKRAwwdcQ" target="_blank" rel="noreferrer">Discord</a>
           <a href="https://ko-fi.com/sandortoth" target="_blank" rel="noreferrer">Ko-fi</a>
         </div>
       </div>
@@ -544,7 +544,7 @@ def configure() -> str:
             <div class="links">
               <a href="https://flixnest.app/feliratok/configure" target="_blank" rel="noreferrer">Configure</a>
               <a href="https://flixnest.app/feliratok/manifest.json" target="_blank" rel="noreferrer">Default</a>
-              <a href="https://github.com/Thsandorh/Fliss-feliratok" target="_blank" rel="noreferrer">GitHub</a>
+              <a href="https://github.com/Thsandorh/Feliratok.eu-subs" target="_blank" rel="noreferrer">GitHub</a>
             </div>
           </div>
           <div class="addon">
@@ -552,7 +552,7 @@ def configure() -> str:
             <div class="links">
               <a href="https://flixnest.app/flix-catalogs/configure" target="_blank" rel="noreferrer">Configure</a>
               <a href="https://flixnest.app/flix-catalogs/manifest.json" target="_blank" rel="noreferrer">Default</a>
-              <a href="https://github.com/Thsandorh/Flix-catalogs" target="_blank" rel="noreferrer">GitHub</a>
+              <a href="https://github.com/Thsandorh/Flix-Catalogs" target="_blank" rel="noreferrer">GitHub</a>
             </div>
           </div>
           <div class="addon">
@@ -560,7 +560,7 @@ def configure() -> str:
             <div class="links">
               <a href="https://flixnest.app/flix-finder/configure" target="_blank" rel="noreferrer">Configure</a>
               <a href="https://flixnest.app/flix-finder/manifest.json" target="_blank" rel="noreferrer">Default</a>
-              <a href="https://github.com/Thsandorh/flix-finder" target="_blank" rel="noreferrer">GitHub</a>
+              <a href="https://github.com/Thsandorh/Flix-finder" target="_blank" rel="noreferrer">GitHub</a>
             </div>
           </div>
           <div class="addon">
@@ -568,7 +568,7 @@ def configure() -> str:
             <div class="links">
               <a href="https://flixnest.app/hd-mozi/configure" target="_blank" rel="noreferrer">Configure</a>
               <a href="https://flixnest.app/hd-mozi/manifest.json" target="_blank" rel="noreferrer">Default</a>
-              <a href="https://github.com/Thsandorh/hdmozi-stremio" target="_blank" rel="noreferrer">GitHub</a>
+              <a href="https://github.com/Thsandorh/Hd-mozi-scraper" target="_blank" rel="noreferrer">GitHub</a>
             </div>
           </div>
           <div class="addon">
@@ -576,7 +576,7 @@ def configure() -> str:
             <div class="links">
               <a href="https://flixnest.app/ncore/configure" target="_blank" rel="noreferrer">Configure</a>
               <a href="https://flixnest.app/ncore/manifest.json" target="_blank" rel="noreferrer">Default</a>
-              <a href="https://github.com/Thsandorh/Flix-ncore-addon" target="_blank" rel="noreferrer">GitHub</a>
+              <a href="https://github.com/Thsandorh/nCore-addon" target="_blank" rel="noreferrer">GitHub</a>
             </div>
           </div>
         </div>
