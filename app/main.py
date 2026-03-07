@@ -13,7 +13,7 @@ from typing import Any
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -34,6 +34,9 @@ class Settings:
     cache_ttl_s: int = int(os.getenv("LASTFM_CACHE_TTL_SECONDS", "300"))
     trending_country: str = os.getenv("LASTFM_TRENDING_COUNTRY", "united states")
     public_base_url: str = os.getenv("PUBLIC_BASE_URL", "https://flix-music.vercel.app").strip().rstrip("/")
+    direct_url_cache_ttl_s: int = int(os.getenv("DIRECT_URL_CACHE_TTL_SECONDS", "1800"))
+    image_cache_ttl_s: int = int(os.getenv("IMAGE_CACHE_TTL_SECONDS", "86400"))
+    artwork_cache_ttl_s: int = int(os.getenv("ARTWORK_CACHE_TTL_SECONDS", "86400"))
 
 
 SETTINGS = Settings()
@@ -63,8 +66,12 @@ _session.mount("https://", HTTPAdapter(max_retries=_retry))
 _session.mount("http://", HTTPAdapter(max_retries=_retry))
 
 _LASTFM_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_DIRECT_URL_CACHE: dict[str, tuple[float, str]] = {}
+_IMAGE_CACHE: dict[str, tuple[float, bytes, str]] = {}
+_ARTWORK_CACHE: dict[str, tuple[float, str | None]] = {}
 HARDCODED_TELEGRAM_MAPPING: dict[str, dict[str, str]] = {}
 LOGO_PATH = Path(__file__).resolve().parent / "assets" / "flix-music.png"
+LASTFM_PLACEHOLDER_MARKERS = ("2a96cbd8b46e442fc41c2b86b821562f",)
 
 
 def _cache_key(params: dict[str, Any]) -> str:
@@ -121,6 +128,87 @@ def _pick_image(images: Any) -> str | None:
         if by_size.get(size):
             return by_size[size]
     return next(iter(by_size.values()), None)
+
+
+def _is_placeholder_lastfm_image(url: str | None) -> bool:
+    normalized = str(url or "").strip().lower()
+    return bool(normalized) and any(marker in normalized for marker in LASTFM_PLACEHOLDER_MARKERS)
+
+
+def _encode_image_token(url: str) -> str:
+    return base64.urlsafe_b64encode(url.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _decode_image_token(token: str) -> str:
+    padding = "=" * (-len(token) % 4)
+    try:
+        value = base64.urlsafe_b64decode((token + padding).encode("ascii")).decode("utf-8")
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Invalid image token") from exc
+    if not value.startswith(("http://", "https://")):
+        raise HTTPException(status_code=404, detail="Invalid image token")
+    return value
+
+
+def _proxied_image_url(url: str | None) -> str | None:
+    normalized = str(url or "").strip()
+    if not normalized:
+        return None
+    return f"{SETTINGS.public_base_url}/image/{_encode_image_token(normalized)}"
+
+
+def _artwork_cache_key(track_ref: dict[str, str]) -> str:
+    return f"{track_ref.get('artist', '').strip().lower()}::{track_ref.get('title', '').strip().lower()}"
+
+
+def _itunes_artwork(track_ref: dict[str, str]) -> str | None:
+    key = _artwork_cache_key(track_ref)
+    now = time.time()
+    cached = _ARTWORK_CACHE.get(key)
+    if cached and cached[0] > now:
+        return cached[1]
+
+    artwork = None
+    try:
+        response = _session.get(
+            "https://itunes.apple.com/search",
+            params={
+                "term": f"{track_ref['artist']} {track_ref['title']}",
+                "media": "music",
+                "entity": "song",
+                "limit": 5,
+            },
+            headers={"User-Agent": SETTINGS.user_agent},
+            timeout=SETTINGS.timeout_s,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        for result in payload.get("results", []):
+            if not isinstance(result, dict):
+                continue
+            artwork = str(result.get("artworkUrl100") or result.get("artworkUrl60") or "").strip() or None
+            if artwork:
+                artwork = artwork.replace("100x100bb", "1200x1200bb").replace("60x60bb", "1200x1200bb")
+                break
+    except requests.RequestException:
+        logger.debug("iTunes artwork lookup failed for %s - %s", track_ref.get("artist"), track_ref.get("title"))
+
+    _ARTWORK_CACHE[key] = (now + SETTINGS.artwork_cache_ttl_s, artwork)
+    return artwork
+
+
+def _poster_url_for_track(track: dict[str, Any]) -> str | None:
+    poster = _pick_image(track.get("image"))
+    if poster and not _is_placeholder_lastfm_image(poster):
+        return _proxied_image_url(poster)
+
+    track_ref = _track_ref_from_catalog_track(track)
+    if track_ref:
+        artwork = _itunes_artwork(track_ref)
+        if artwork:
+            return _proxied_image_url(artwork)
+
+    return _proxied_image_url(poster) if poster else None
 
 
 def _runtime_from_ms(value: Any) -> str:
@@ -212,7 +300,7 @@ def _build_meta_item(track: dict[str, Any], *, id_value: str | None = None) -> d
     artist = _track_artist_name(track)
     title = str(track.get("name") or track.get("title") or "Unknown").strip() or "Unknown"
     mbid = str(track.get("mbid") or "").strip()
-    poster = _pick_image(track.get("image"))
+    poster = _poster_url_for_track(track)
     album = track.get("album") if isinstance(track.get("album"), dict) else {}
     album_title = str(album.get("title") or album.get("#text") or "").strip()
     year = _year_from_text(album.get("published") or track.get("wiki", {}).get("published") or "")
@@ -490,6 +578,11 @@ def _stream_payload(type: str, id: str) -> dict[str, Any]:
             raise HTTPException(status_code=502, detail="Configured direct_url points to Telegram; expected playable media URL")
         return {"streams": [{"title": "Direct URL", "url": configured_url}]}
 
+    now = time.time()
+    cached_direct = _DIRECT_URL_CACHE.get(id)
+    if cached_direct and cached_direct[0] > now and not _is_telegram_url(cached_direct[1]):
+        return {"streams": [{"title": "Cached direct stream", "url": cached_direct[1]}]}
+
     if entry and "message_url" in entry:
         query = entry["message_url"]
     else:
@@ -500,6 +593,7 @@ def _stream_payload(type: str, id: str) -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"MTProto bot chain failed: {exc}") from exc
 
+    _DIRECT_URL_CACHE[id] = (now + SETTINGS.direct_url_cache_ttl_s, direct_url)
     return {
         "streams": [
             {
@@ -635,6 +729,29 @@ def logo() -> FileResponse:
     return FileResponse(LOGO_PATH, media_type="image/png", headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
+@app.get("/image/{token}", include_in_schema=False)
+def image_proxy(token: str) -> Response:
+    source_url = _decode_image_token(token)
+    now = time.time()
+    cached = _IMAGE_CACHE.get(source_url)
+    if cached and cached[0] > now:
+        return Response(content=cached[1], media_type=cached[2], headers={"Cache-Control": "public, max-age=86400, stale-while-revalidate=604800"})
+
+    try:
+        response = _session.get(source_url, headers={"User-Agent": SETTINGS.user_agent, "Accept": "image/*"}, timeout=SETTINGS.timeout_s)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Image fetch failed: {exc}") from exc
+
+    content_type = str(response.headers.get("Content-Type") or "image/jpeg").split(";", 1)[0].strip() or "image/jpeg"
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=502, detail="Upstream did not return an image")
+
+    body = response.content
+    _IMAGE_CACHE[source_url] = (now + SETTINGS.image_cache_ttl_s, body, content_type)
+    return Response(content=body, media_type=content_type, headers={"Cache-Control": "public, max-age=86400, stale-while-revalidate=604800"})
+
+
 @app.get("/manifest.json")
 def manifest(lastfm_user: str | None = None) -> dict[str, Any]:
     return _manifest_payload(lastfm_user=lastfm_user.strip() if lastfm_user else None)
@@ -682,3 +799,5 @@ def stream(type: str, id: str) -> dict[str, Any]:
 def configured_stream(config: str, type: str, id: str) -> dict[str, Any]:
     _decode_config(config)
     return _stream_payload(type, id)
+
+

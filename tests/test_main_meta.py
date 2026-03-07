@@ -1,7 +1,7 @@
 from app import main
 
 
-def test_build_meta_item_enriched_fields():
+def test_build_meta_item_enriched_fields(monkeypatch):
     track = {
         "name": "One More Time",
         "duration": "320000",
@@ -16,7 +16,7 @@ def test_build_meta_item_enriched_fields():
     meta = main._build_meta_item(track)
 
     assert meta["name"] == "One More Time"
-    assert meta["poster"] == "https://img.example/cover.jpg"
+    assert meta["poster"].startswith(f"{main.SETTINGS.public_base_url}/image/")
     assert meta["releaseInfo"] == "2000"
     assert meta["genres"] == ["house", "electronic"]
     assert meta["cast"] == ["Daft Punk"]
@@ -55,4 +55,17 @@ def test_catalog_enriches_missing_poster_with_track_info(monkeypatch):
 
     payload = main._catalog_payload('movie', 'lastfm-top')
 
-    assert payload['metas'][0]['poster'] == 'https://img.example/enriched-cover.jpg'
+    assert payload['metas'][0]['poster'].startswith(f"{main.SETTINGS.public_base_url}/image/")
+
+
+def test_catalog_replaces_lastfm_placeholder_with_itunes_artwork(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        '_top_tracks',
+        lambda: [{'name': 'One More Time', 'artist': {'name': 'Daft Punk'}, 'image': [{'size': 'large', '#text': 'https://lastfm.freetls.fastly.net/i/u/300x300/2a96cbd8b46e442fc41c2b86b821562f.png'}]}],
+    )
+    monkeypatch.setattr(main, '_itunes_artwork', lambda track_ref: 'https://artwork.example/cover.jpg')
+
+    payload = main._catalog_payload('movie', 'lastfm-top')
+
+    assert payload['metas'][0]['poster'].startswith(f"{main.SETTINGS.public_base_url}/image/")
