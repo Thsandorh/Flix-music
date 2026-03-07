@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from requests.adapters import HTTPAdapter
-from urllib.parse import parse_qsl, unquote
+from urllib.parse import parse_qsl, unquote, urlparse
 from urllib3.util.retry import Retry
 
 from app.helpers import build_recording_search_query, env_mapping, has_telegram_app_credentials
@@ -611,6 +611,46 @@ def _playback_url(id: str) -> str:
     return f"{SETTINGS.public_base_url}/play/{token}/audio.mp3"
 
 
+def _expand_direct_stream_url(url: str) -> str:
+    normalized = str(url or "").strip()
+    if not normalized:
+        return normalized
+
+    parsed = urlparse(normalized)
+    host = str(parsed.netloc or "").strip().lower()
+    query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    if host == "sba.yandex.ru" and parsed.path.startswith("/redirect"):
+        redirected = str(query_params.get("url") or "").strip()
+        return redirected or normalized
+
+    if host not in {"clck.ru", "www.clck.ru"}:
+        return normalized
+
+    response = None
+    try:
+        response = _session.get(
+            normalized,
+            allow_redirects=False,
+            stream=True,
+            headers={"User-Agent": SETTINGS.user_agent},
+            timeout=SETTINGS.timeout_s,
+        )
+        location = str((getattr(response, "headers", {}) or {}).get("Location") or "").strip()
+        if location:
+            location_parsed = urlparse(location)
+            location_params = dict(parse_qsl(location_parsed.query, keep_blank_values=True))
+            redirected = str(location_params.get("url") or location).strip()
+            return redirected or normalized
+        return normalized
+    except requests.RequestException:
+        logger.debug("Shortlink expansion failed for %s", normalized)
+        return normalized
+    finally:
+        close = getattr(response, "close", None)
+        if callable(close):
+            close()
+
+
 def _resolve_direct_stream_url(id: str) -> str:
     track_ref = _decode_track_id(id)
     entry = _find_mapping_entry(track_ref, id)
@@ -628,6 +668,7 @@ def _resolve_direct_stream_url(id: str) -> str:
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"MTProto bot chain failed: {exc}") from exc
 
+    direct_url = _expand_direct_stream_url(direct_url)
     _DIRECT_URL_CACHE[id] = (time.time() + SETTINGS.direct_url_cache_ttl_s, direct_url)
     return direct_url
 
