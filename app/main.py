@@ -565,23 +565,33 @@ def _meta_payload(type: str, id: str) -> dict[str, Any]:
     return {"meta": _build_meta_item(track, id_value=id)}
 
 
-def _stream_payload(type: str, id: str) -> dict[str, Any]:
-    if type != "movie" or not id.startswith("lfm:"):
-        raise HTTPException(status_code=404, detail="Stream not found")
+def _cached_or_configured_direct_url(track_ref: dict[str, str], id: str, entry: dict[str, str] | None = None) -> str | None:
+    resolved_entry = entry or _find_mapping_entry(track_ref, id)
 
-    track_ref = _decode_track_id(id)
-    entry = _find_mapping_entry(track_ref, id)
-
-    if entry and "direct_url" in entry:
-        configured_url = str(entry["direct_url"]).strip()
+    if resolved_entry and "direct_url" in resolved_entry:
+        configured_url = str(resolved_entry["direct_url"]).strip()
         if _is_telegram_url(configured_url):
             raise HTTPException(status_code=502, detail="Configured direct_url points to Telegram; expected playable media URL")
-        return {"streams": [{"title": "Direct URL", "url": configured_url}]}
+        return configured_url
 
     now = time.time()
     cached_direct = _DIRECT_URL_CACHE.get(id)
     if cached_direct and cached_direct[0] > now and not _is_telegram_url(cached_direct[1]):
-        return {"streams": [{"title": "Cached direct stream", "url": cached_direct[1]}]}
+        return cached_direct[1]
+
+    return None
+
+
+def _playback_url(id: str) -> str:
+    return f"{SETTINGS.public_base_url}/play/{id}"
+
+
+def _resolve_direct_stream_url(id: str) -> str:
+    track_ref = _decode_track_id(id)
+    entry = _find_mapping_entry(track_ref, id)
+    existing = _cached_or_configured_direct_url(track_ref, id, entry)
+    if existing:
+        return existing
 
     if entry and "message_url" in entry:
         query = entry["message_url"]
@@ -593,15 +603,32 @@ def _stream_payload(type: str, id: str) -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"MTProto bot chain failed: {exc}") from exc
 
-    _DIRECT_URL_CACHE[id] = (now + SETTINGS.direct_url_cache_ttl_s, direct_url)
+    _DIRECT_URL_CACHE[id] = (time.time() + SETTINGS.direct_url_cache_ttl_s, direct_url)
+    return direct_url
+
+
+def _stream_payload(type: str, id: str) -> dict[str, Any]:
+    if type != "movie" or not id.startswith("lfm:"):
+        raise HTTPException(status_code=404, detail="Stream not found")
+
+    track_ref = _decode_track_id(id)
+    direct_url = _cached_or_configured_direct_url(track_ref, id)
+    if direct_url:
+        return {"streams": [{"title": "Direct stream", "url": direct_url}]}
+
     return {
         "streams": [
             {
-                "title": "MTProto resolved direct stream",
-                "url": direct_url,
+                "title": "Resolve and play",
+                "url": _playback_url(id),
             }
         ]
     }
+
+
+@app.get("/play/{id}", include_in_schema=False)
+def play(id: str) -> RedirectResponse:
+    return RedirectResponse(url=_resolve_direct_stream_url(id), status_code=307)
 
 
 @app.get("/")
@@ -615,93 +642,188 @@ def configure() -> str:
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Flix-Music Configure</title>
   <style>
-    body { font-family: Segoe UI, sans-serif; max-width: 920px; margin: 40px auto; padding: 0 20px 40px; background: #0f172a; color: #e5e7eb; }
-    .card { background: #111827; border: 1px solid #374151; border-radius: 16px; padding: 24px; }
+    :root {
+      --bg-top: #07111f;
+      --bg-bottom: #10273f;
+      --card: rgba(11, 22, 39, 0.86);
+      --card-edge: rgba(148, 163, 184, 0.18);
+      --text: #f8fafc;
+      --muted: #9fb0c7;
+      --accent: #5ee7b7;
+      --accent-strong: #34d399;
+      --accent-dark: #052e2b;
+      --secondary: #1d4ed8;
+      --secondary-soft: rgba(29, 78, 216, 0.14);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Segoe UI, sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at top left, rgba(94, 231, 183, 0.14), transparent 32%), linear-gradient(160deg, var(--bg-top), var(--bg-bottom));
+      min-height: 100vh;
+    }
+    .shell { max-width: 1080px; margin: 0 auto; padding: 40px 20px 56px; }
     .stack { display: grid; gap: 20px; }
-    .grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
-    .addon-list { display: grid; gap: 12px; }
-    .addon { padding-top: 12px; border-top: 1px solid #1f2937; }
+    .hero {
+      background: linear-gradient(145deg, rgba(8, 19, 35, 0.92), rgba(13, 31, 53, 0.88));
+      border: 1px solid var(--card-edge);
+      border-radius: 28px;
+      padding: 28px;
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+    }
+    .hero-grid { display: grid; gap: 22px; grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr); align-items: start; }
+    .eyebrow { color: var(--accent); font-size: 0.8rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }
+    h1 { margin: 10px 0 12px; font-size: clamp(2rem, 4vw, 3.3rem); line-height: 0.96; }
+    p { line-height: 1.6; margin: 0; }
+    .muted { color: var(--muted); }
+    .panel, .card {
+      background: var(--card);
+      border: 1px solid var(--card-edge);
+      border-radius: 22px;
+      padding: 22px;
+      backdrop-filter: blur(10px);
+    }
+    .label { display: block; margin-bottom: 10px; color: var(--muted); font-size: 0.92rem; }
+    input {
+      width: 100%;
+      padding: 14px 16px;
+      border-radius: 16px;
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      background: rgba(2, 6, 23, 0.78);
+      color: var(--text);
+      font-size: 1rem;
+      outline: none;
+    }
+    input:focus { border-color: rgba(94, 231, 183, 0.7); box-shadow: 0 0 0 4px rgba(94, 231, 183, 0.14); }
+    .actions, .links { display: flex; flex-wrap: wrap; gap: 12px; }
+    .actions { margin-top: 14px; }
+    .button, button {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 13px 18px;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+      transition: transform 140ms ease, opacity 140ms ease, background 140ms ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .button:hover, button:hover { transform: translateY(-1px); }
+    .button.primary, button.primary { background: var(--accent); color: var(--accent-dark); }
+    .button.secondary, button.secondary { background: var(--secondary-soft); color: #dbeafe; border: 1px solid rgba(147, 197, 253, 0.22); }
+    .button.ghost, button.ghost { background: rgba(148, 163, 184, 0.08); color: var(--text); border: 1px solid rgba(148, 163, 184, 0.18); }
+    .button[aria-disabled="true"] { opacity: 0.5; pointer-events: none; }
+    .output { display: grid; gap: 14px; }
+    .manifest-wrap { display: grid; gap: 10px; }
+    .manifest-field { width: 100%; font-family: Consolas, monospace; font-size: 0.95rem; }
+    .hint { font-size: 0.92rem; color: var(--muted); }
+    .status { min-height: 1.3em; color: var(--accent); font-size: 0.92rem; }
+    .grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .addon-list { display: grid; gap: 14px; }
+    .addon { padding-top: 14px; border-top: 1px solid rgba(148, 163, 184, 0.12); }
     .addon:first-child { padding-top: 0; border-top: 0; }
-    .links { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; }
-    .links a { word-break: normal; }
-    input { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #4b5563; background: #030712; color: #fff; }
-    button { margin-top: 12px; padding: 12px 16px; border: 0; border-radius: 10px; background: #22c55e; color: #052e16; font-weight: 700; cursor: pointer; }
-    a { color: #93c5fd; word-break: break-all; }
-    .muted { color: #9ca3af; }
-    h2 { margin: 0 0 12px; font-size: 1.1rem; }
+    .links a { color: #bfdbfe; text-decoration: none; }
+    .links a:hover { text-decoration: underline; }
+    h2 { margin: 0 0 12px; font-size: 1.08rem; }
     h3 { margin: 0; font-size: 1rem; }
-    p { line-height: 1.5; }
+    .pill { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 999px; background: rgba(94, 231, 183, 0.12); color: #d1fae5; font-size: 0.88rem; }
+    @media (max-width: 860px) { .hero-grid { grid-template-columns: 1fr; } .shell { padding-top: 24px; } }
   </style>
 </head>
 <body>
-  <div class="stack">
-    <div class="card">
-      <h1>Flix-Music configuration</h1>
-      <p class="muted">Enter a Last.fm username to enable personal Loved, Recent and Top Tracks catalogs.</p>
-      <label for="lastfmUser">Last.fm username</label>
-      <input id="lastfmUser" placeholder="your-lastfm-username" />
-      <button type="button" onclick="buildUrl()">Generate manifest URL</button>
-      <p id="out" style="margin-top:16px"></p>
-    </div>
-    <div class="grid">
-      <div class="card">
-        <h2>Community</h2>
-        <p class="muted">Join the Discord or support the project on Ko-fi.</p>
-        <div class="links">
-          <a href="https://discord.gg/GnKRAwwdcQ" target="_blank" rel="noreferrer">Discord</a>
-          <a href="https://ko-fi.com/sandortoth" target="_blank" rel="noreferrer">Ko-fi</a>
+  <div class="shell">
+    <div class="stack">
+      <section class="hero">
+        <div class="hero-grid">
+          <div class="panel">
+            <div class="eyebrow">Personal music addon</div>
+            <h1>Flix-Music</h1>
+            <p class="muted">Build a personal manifest from a Last.fm username, copy it in one click, or open the direct install flow in Stremio immediately.</p>
+          </div>
+          <div class="panel output">
+            <span class="pill">Stremio-ready manifest</span>
+            <label class="label" for="lastfmUser">Last.fm username</label>
+            <input id="lastfmUser" placeholder="your-lastfm-username" autocomplete="off" />
+            <div class="actions">
+              <button type="button" class="primary" onclick="buildUrl()">Generate manifest</button>
+              <button type="button" class="ghost" onclick="copyManifest()">Copy URL</button>
+            </div>
+            <div class="manifest-wrap">
+              <input id="manifestUrl" class="manifest-field" readonly value="" />
+              <div class="actions">
+                <a id="manifestLink" class="button secondary" href="#" target="_blank" rel="noreferrer" aria-disabled="true">Open manifest</a>
+                <a id="installLink" class="button primary" href="#" aria-disabled="true">Install in Stremio</a>
+              </div>
+            </div>
+            <p class="hint">If the username is empty, the default public manifest is generated.</p>
+            <div id="status" class="status"></div>
+          </div>
         </div>
-      </div>
-      <div class="card">
-        <h2>More add-ons</h2>
-        <div class="addon-list">
-          <div class="addon">
-            <h3>Flix Streams</h3>
-            <div class="links">
-              <a href="https://flixnest.app/flix-streams/configure" target="_blank" rel="noreferrer">Configure</a>
-              <a href="https://flixnest.app/flix-streams/manifest.json" target="_blank" rel="noreferrer">Default</a>
-            </div>
+      </section>
+      <div class="grid">
+        <div class="card">
+          <h2>Community</h2>
+          <p class="muted">Join the Discord or support the project on Ko-fi.</p>
+          <div class="links">
+            <a href="https://discord.gg/GnKRAwwdcQ" target="_blank" rel="noreferrer">Discord</a>
+            <a href="https://ko-fi.com/sandortoth" target="_blank" rel="noreferrer">Ko-fi</a>
           </div>
-          <div class="addon">
-            <h3>Flix feliratok</h3>
-            <div class="links">
-              <a href="https://flixnest.app/feliratok/configure" target="_blank" rel="noreferrer">Configure</a>
-              <a href="https://flixnest.app/feliratok/manifest.json" target="_blank" rel="noreferrer">Default</a>
-              <a href="https://github.com/Thsandorh/Feliratok.eu-subs" target="_blank" rel="noreferrer">GitHub</a>
+        </div>
+        <div class="card">
+          <h2>More add-ons</h2>
+          <div class="addon-list">
+            <div class="addon">
+              <h3>Flix Streams</h3>
+              <div class="links">
+                <a href="https://flixnest.app/flix-streams/configure" target="_blank" rel="noreferrer">Configure</a>
+                <a href="https://flixnest.app/flix-streams/manifest.json" target="_blank" rel="noreferrer">Default</a>
+              </div>
             </div>
-          </div>
-          <div class="addon">
-            <h3>Flix Catalogs</h3>
-            <div class="links">
-              <a href="https://flixnest.app/flix-catalogs/configure" target="_blank" rel="noreferrer">Configure</a>
-              <a href="https://flixnest.app/flix-catalogs/manifest.json" target="_blank" rel="noreferrer">Default</a>
-              <a href="https://github.com/Thsandorh/Flix-Catalogs" target="_blank" rel="noreferrer">GitHub</a>
+            <div class="addon">
+              <h3>Flix feliratok</h3>
+              <div class="links">
+                <a href="https://flixnest.app/feliratok/configure" target="_blank" rel="noreferrer">Configure</a>
+                <a href="https://flixnest.app/feliratok/manifest.json" target="_blank" rel="noreferrer">Default</a>
+                <a href="https://github.com/Thsandorh/Feliratok.eu-subs" target="_blank" rel="noreferrer">GitHub</a>
+              </div>
             </div>
-          </div>
-          <div class="addon">
-            <h3>Flix Finder</h3>
-            <div class="links">
-              <a href="https://flixnest.app/flix-finder/configure" target="_blank" rel="noreferrer">Configure</a>
-              <a href="https://flixnest.app/flix-finder/manifest.json" target="_blank" rel="noreferrer">Default</a>
-              <a href="https://github.com/Thsandorh/Flix-finder" target="_blank" rel="noreferrer">GitHub</a>
+            <div class="addon">
+              <h3>Flix Catalogs</h3>
+              <div class="links">
+                <a href="https://flixnest.app/flix-catalogs/configure" target="_blank" rel="noreferrer">Configure</a>
+                <a href="https://flixnest.app/flix-catalogs/manifest.json" target="_blank" rel="noreferrer">Default</a>
+                <a href="https://github.com/Thsandorh/Flix-Catalogs" target="_blank" rel="noreferrer">GitHub</a>
+              </div>
             </div>
-          </div>
-          <div class="addon">
-            <h3>HDMozi</h3>
-            <div class="links">
-              <a href="https://flixnest.app/hd-mozi/configure" target="_blank" rel="noreferrer">Configure</a>
-              <a href="https://flixnest.app/hd-mozi/manifest.json" target="_blank" rel="noreferrer">Default</a>
-              <a href="https://github.com/Thsandorh/Hd-mozi-scraper" target="_blank" rel="noreferrer">GitHub</a>
+            <div class="addon">
+              <h3>Flix Finder</h3>
+              <div class="links">
+                <a href="https://flixnest.app/flix-finder/configure" target="_blank" rel="noreferrer">Configure</a>
+                <a href="https://flixnest.app/flix-finder/manifest.json" target="_blank" rel="noreferrer">Default</a>
+                <a href="https://github.com/Thsandorh/Flix-finder" target="_blank" rel="noreferrer">GitHub</a>
+              </div>
             </div>
-          </div>
-          <div class="addon">
-            <h3>nCore</h3>
-            <div class="links">
-              <a href="https://flixnest.app/ncore/configure" target="_blank" rel="noreferrer">Configure</a>
-              <a href="https://flixnest.app/ncore/manifest.json" target="_blank" rel="noreferrer">Default</a>
-              <a href="https://github.com/Thsandorh/nCore-addon" target="_blank" rel="noreferrer">GitHub</a>
+            <div class="addon">
+              <h3>HDMozi</h3>
+              <div class="links">
+                <a href="https://flixnest.app/hd-mozi/configure" target="_blank" rel="noreferrer">Configure</a>
+                <a href="https://flixnest.app/hd-mozi/manifest.json" target="_blank" rel="noreferrer">Default</a>
+                <a href="https://github.com/Thsandorh/Hd-mozi-scraper" target="_blank" rel="noreferrer">GitHub</a>
+              </div>
+            </div>
+            <div class="addon">
+              <h3>nCore</h3>
+              <div class="links">
+                <a href="https://flixnest.app/ncore/configure" target="_blank" rel="noreferrer">Configure</a>
+                <a href="https://flixnest.app/ncore/manifest.json" target="_blank" rel="noreferrer">Default</a>
+                <a href="https://github.com/Thsandorh/nCore-addon" target="_blank" rel="noreferrer">GitHub</a>
+              </div>
             </div>
           </div>
         </div>
@@ -712,13 +834,49 @@ def configure() -> str:
     function base64UrlEncode(value) {
       return btoa(unescape(encodeURIComponent(value))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
     }
-    function buildUrl() {
+    function buildManifestUrl() {
       const username = document.getElementById('lastfmUser').value.trim();
-      const payload = username ? { lastfm_user: username } : {};
-      const token = base64UrlEncode(JSON.stringify(payload));
-      const url = window.location.origin + '/c/' + token + '/manifest.json';
-      document.getElementById('out').innerHTML = 'Configured manifest: <a href="' + url + '">' + url + '</a>';
+      if (!username) {
+        return window.location.origin + '/manifest.json';
+      }
+      const token = base64UrlEncode(JSON.stringify({ lastfm_user: username }));
+      return window.location.origin + '/c/' + token + '/manifest.json';
     }
+    function buildStremioUrl(url) {
+      return 'stremio://' + url.replace(/^https?:\/\//, '');
+    }
+    function setButtonState(element, enabled) {
+      element.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+    }
+    function buildUrl() {
+      const url = buildManifestUrl();
+      const manifestField = document.getElementById('manifestUrl');
+      const manifestLink = document.getElementById('manifestLink');
+      const installLink = document.getElementById('installLink');
+      manifestField.value = url;
+      manifestLink.href = url;
+      installLink.href = buildStremioUrl(url);
+      setButtonState(manifestLink, true);
+      setButtonState(installLink, true);
+      document.getElementById('status').textContent = 'Manifest ready.';
+    }
+    async function copyManifest() {
+      const manifestField = document.getElementById('manifestUrl');
+      const url = manifestField.value || buildManifestUrl();
+      manifestField.value = url;
+      try {
+        await navigator.clipboard.writeText(url);
+        document.getElementById('status').textContent = 'Manifest URL copied.';
+      } catch (_error) {
+        manifestField.focus();
+        manifestField.select();
+        document.execCommand('copy');
+        document.getElementById('status').textContent = 'Manifest URL selected for copy.';
+      }
+      buildUrl();
+    }
+    document.getElementById('lastfmUser').addEventListener('input', buildUrl);
+    window.addEventListener('DOMContentLoaded', buildUrl);
   </script>
 </body>
 </html>"""

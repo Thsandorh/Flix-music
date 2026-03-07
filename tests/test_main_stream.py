@@ -1,3 +1,5 @@
+import time
+
 import pytest
 from fastapi import HTTPException
 
@@ -23,7 +25,17 @@ def test_stream_returns_non_telegram_direct_url(monkeypatch):
     assert payload["streams"][0]["url"] == "https://cdn.example/a.mp3"
 
 
-def test_stream_resolves_via_mtproto(monkeypatch):
+def test_stream_returns_lazy_play_url(monkeypatch):
+    track_id = main._build_track_id(artist="Daft Punk", title="One More Time")
+    monkeypatch.setattr(main, "_find_mapping_entry", lambda _track_ref, _id: None)
+    monkeypatch.setattr(main, "_DIRECT_URL_CACHE", {})
+
+    payload = main.stream("movie", track_id)
+
+    assert payload["streams"][0]["url"] == f"{main.SETTINGS.public_base_url}/play/{track_id}"
+
+
+def test_play_resolves_via_mtproto(monkeypatch):
     track_id = main._build_track_id(artist="Daft Punk", title="One More Time")
 
     async def fake_resolver(_query):
@@ -31,27 +43,19 @@ def test_stream_resolves_via_mtproto(monkeypatch):
 
     monkeypatch.setattr(main, "_find_mapping_entry", lambda _track_ref, _id: None)
     monkeypatch.setattr(main, "resolve_direct_url_from_bots", fake_resolver)
+    monkeypatch.setattr(main, "_DIRECT_URL_CACHE", {})
 
-    payload = main.stream("movie", track_id)
+    response = main.play(track_id)
 
-    assert payload["streams"][0]["url"] == "https://cdn.example/resolved.mp3"
+    assert response.status_code == 307
+    assert response.headers["location"] == "https://cdn.example/resolved.mp3"
 
 
 def test_stream_uses_cached_mtproto_result(monkeypatch):
     track_id = main._build_track_id(artist="Daft Punk", title="One More Time")
-    calls = {"count": 0}
-
-    async def fake_resolver(_query):
-        calls["count"] += 1
-        return "https://cdn.example/cached.mp3"
-
     monkeypatch.setattr(main, "_find_mapping_entry", lambda _track_ref, _id: None)
-    monkeypatch.setattr(main, "resolve_direct_url_from_bots", fake_resolver)
-    monkeypatch.setattr(main, "_DIRECT_URL_CACHE", {})
+    monkeypatch.setattr(main, "_DIRECT_URL_CACHE", {track_id: (time.time() + 60, "https://cdn.example/cached.mp3")})
 
-    first = main.stream("movie", track_id)
-    second = main.stream("movie", track_id)
+    payload = main.stream("movie", track_id)
 
-    assert first["streams"][0]["url"] == "https://cdn.example/cached.mp3"
-    assert second["streams"][0]["url"] == "https://cdn.example/cached.mp3"
-    assert calls["count"] == 1
+    assert payload["streams"][0]["url"] == "https://cdn.example/cached.mp3"

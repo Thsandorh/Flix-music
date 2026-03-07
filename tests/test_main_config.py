@@ -50,7 +50,10 @@ def test_configured_catalog_uses_token_user(monkeypatch):
 def test_configure_page_contains_working_markup():
     html = main.configure()
     assert '<input id="lastfmUser"' in html
-    assert 'onclick="buildUrl()"' in html
+    assert 'id="manifestUrl"' in html
+    assert 'copyManifest()' in html
+    assert 'id="installLink"' in html
+    assert 'stremio://' in html
     assert '\\"' not in html
     assert 'https://discord.gg/GnKRAwwdcQ' in html
     assert 'https://ko-fi.com/sandortoth' in html

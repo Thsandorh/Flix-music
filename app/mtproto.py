@@ -145,19 +145,44 @@ async def _latest_message_id(client: Any, peer: str) -> int:
     return max(0, int(getattr(messages[0], "id", 0) or 0))
 
 
-async def _collect_new_messages(client: Any, peer: str, min_id: int, *, limit: int, wait_seconds: float) -> list[Any]:
+async def _collect_new_messages(
+    client: Any,
+    peer: str,
+    min_id: int,
+    *,
+    limit: int,
+    wait_seconds: float,
+    stop_when: Any | None = None,
+    settle_seconds: float = 0.35,
+) -> list[Any]:
     deadline = asyncio.get_running_loop().time() + max(0.0, float(wait_seconds or 0.0))
-    poll_seconds = 0.5
+    poll_seconds = 0.25
     collected: dict[int, Any] = {}
+    settle_deadline: float | None = None
     while True:
         messages = await client.get_messages(peer, limit=limit, min_id=min_id)
         for message in messages:
             message_id = int(getattr(message, 'id', 0) or 0)
             if message_id > int(min_id or 0):
                 collected[message_id] = message
-        if asyncio.get_running_loop().time() >= deadline:
-            return [collected[key] for key in sorted(collected)]
-        await asyncio.sleep(min(poll_seconds, max(0.0, deadline - asyncio.get_running_loop().time())))
+
+        ordered = [collected[key] for key in sorted(collected)]
+        now = asyncio.get_running_loop().time()
+        if stop_when and stop_when(ordered):
+            if settle_deadline is None:
+                settle_deadline = now + max(0.0, float(settle_seconds or 0.0))
+            if now >= settle_deadline:
+                return ordered
+        else:
+            settle_deadline = None
+
+        if now >= deadline:
+            return ordered
+
+        sleep_for = min(poll_seconds, max(0.0, deadline - now))
+        if settle_deadline is not None:
+            sleep_for = min(sleep_for, max(0.0, settle_deadline - now))
+        await asyncio.sleep(sleep_for)
 
 
 async def _authorized_client(api_id: int, api_hash: str, session: str, session_path: str):
@@ -187,6 +212,11 @@ async def _authorized_client(api_id: int, api_hash: str, session: str, session_p
     return client
 
 
+
+def _direct_response_ready(messages: list[Any]) -> bool:
+    return bool(_first_non_telegram_url(messages))
+
+
 async def _resolve_search_result(client: Any, search_bot: str, query: str, wait_seconds: float) -> tuple[str | None, Any | None]:
     sent_to_search = await client.send_message(search_bot, query)
     search_messages = await _collect_new_messages(
@@ -195,6 +225,11 @@ async def _resolve_search_result(client: Any, search_bot: str, query: str, wait_
         sent_to_search.id,
         limit=20,
         wait_seconds=wait_seconds,
+        stop_when=lambda messages: bool(
+            _select_search_result_candidate(messages, search_bot=search_bot)
+            or _first_document_message(messages)
+            or any(_first_result_button_coords(message) for message in messages)
+        ),
     )
 
     candidate_url = _select_search_result_candidate(search_messages, search_bot=search_bot)
@@ -213,10 +248,14 @@ async def _resolve_search_result(client: Any, search_bot: str, query: str, wait_
             latest_seen_id,
             limit=10,
             wait_seconds=wait_seconds,
+            stop_when=lambda messages: bool(_first_document_message(messages) or _first_non_telegram_url(messages)),
         )
         document_message = _first_document_message(followup_messages)
         if document_message:
             return None, document_message
+        followup_url = _first_non_telegram_url(followup_messages)
+        if followup_url:
+            return followup_url, None
 
     return None, None
 
@@ -257,6 +296,7 @@ async def resolve_direct_url_from_bots(query: str) -> str:
             before_direct_id,
             limit=20,
             wait_seconds=wait_seconds,
+            stop_when=_direct_response_ready,
         )
         direct_url = _first_non_telegram_url(direct_messages)
 
