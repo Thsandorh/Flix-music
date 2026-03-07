@@ -532,6 +532,14 @@ def configure() -> str:
         <h2>More add-ons</h2>
         <div class="addon-list">
           <div class="addon">
+            <h3>Flix Streams</h3>
+            <div class="links">
+              <a href="https://flixnest.app/flix-streams/configure" target="_blank" rel="noreferrer">Configure</a>
+              <a href="https://flixnest.app/flix-streams/manifest.json" target="_blank" rel="noreferrer">Default</a>
+              <a href="https://github.com/Thsandorh/Flix-streams" target="_blank" rel="noreferrer">GitHub</a>
+            </div>
+          </div>
+          <div class="addon">
             <h3>Flix feliratok</h3>
             <div class="links">
               <a href="https://flixnest.app/feliratok/configure" target="_blank" rel="noreferrer">Configure</a>
