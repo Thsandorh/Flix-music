@@ -638,17 +638,10 @@ def _stream_payload(type: str, id: str) -> dict[str, Any]:
 
     track_ref = _decode_track_id(id)
     direct_url = _cached_or_configured_direct_url(track_ref, id)
-    if direct_url:
-        return {"streams": [{"title": "Direct stream", "url": direct_url}]}
+    if not direct_url:
+        direct_url = _resolve_direct_stream_url(id)
 
-    return {
-        "streams": [
-            {
-                "title": "Resolve and play",
-                "url": _playback_url(id),
-            }
-        ]
-    }
+    return {"streams": [{"title": "Direct stream", "url": direct_url}]}
 
 
 @app.get("/play/{token}/{label}", include_in_schema=False)
