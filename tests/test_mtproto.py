@@ -12,6 +12,7 @@ from app.mtproto import (
     _first_url_from_messages,
     _is_telegram_url,
     _select_search_result_candidate,
+    _search_queries,
     resolve_direct_url_from_bots,
 )
 
@@ -120,6 +121,19 @@ def test_first_result_button_coords_selects_numbered_callback_button():
     assert _first_result_button_coords(message) == (0, 0)
 
 
+def test_first_result_button_coords_selects_music_downloader_button():
+    message = _msg("results", buttons=[[_callback_button("1. Song Name", b"download:abc123")]])
+    assert _first_result_button_coords(message) == (0, 0)
+
+
+def test_search_queries_adds_fallback_variants():
+    assert _search_queries("Kendrick Lamar - HUMBLE.") == [
+        "Kendrick Lamar - HUMBLE.",
+        "Kendrick Lamar HUMBLE.",
+        "Kendrick Lamar HUMBLE",
+    ]
+
+
 def test_is_telegram_url():
     assert _is_telegram_url("https://t.me/abc") is True
     assert _is_telegram_url("https://telegram.me/abc") is True
@@ -162,12 +176,10 @@ class _FakeClient:
         return SimpleNamespace(id=900 + len(self.forwarded))
 
     async def get_messages(self, peer, limit=20, min_id=0):
-        if peer == "vkmusic_bot":
-            rows = self.search_messages + (self.search_followups if self.search_clicked else [])
-        elif peer == "LinkFilesBot":
+        if peer == "LinkFilesBot":
             rows = self.direct_messages if self.direct_activated else []
         else:
-            rows = []
+            rows = self.search_messages + (self.search_followups if self.search_clicked else [])
         return [row for row in rows if int(getattr(row, 'id', 0) or 0) > int(min_id or 0)][:limit]
 
 
@@ -198,7 +210,7 @@ async def _mark_clicked(client, _row, _col):
 def test_resolve_direct_url_from_bots_prefers_non_bot_result_link(monkeypatch):
     client = _FakeClient(
         search_messages=[
-            _msg("https://t.me/vkmusic_bot?start=AAA111", id=101),
+            _msg("https://t.me/MusicDownloaderRobot?start=AAA111", id=101),
             _msg("https://t.me/c/123/456", id=102),
         ],
         direct_messages=[_msg("https://cdn.example/song.mp3", id=201)],
@@ -217,7 +229,7 @@ def test_resolve_direct_url_from_bots_prefers_non_bot_result_link(monkeypatch):
 
     assert result == "https://cdn.example/song.mp3"
     assert client.sent == [
-        ("vkmusic_bot", "Metallica Nothing Else Matters"),
+        ("MusicDownloaderRobot", "Metallica Nothing Else Matters"),
         ("LinkFilesBot", "https://t.me/c/123/456"),
     ]
     assert client.forwarded == []
@@ -259,8 +271,36 @@ def test_resolve_direct_url_from_bots_clicks_callback_result_and_forwards_docume
     result = asyncio.run(resolve_direct_url_from_bots("Metallica Nothing Else Matters"))
 
     assert result == "https://clck.ru/direct"
-    assert client.sent == [("vkmusic_bot", "Metallica Nothing Else Matters")]
+    assert client.sent == [("MusicDownloaderRobot", "Metallica Nothing Else Matters")]
     assert client.forwarded == [("LinkFilesBot", 102)]
+
+
+def test_resolve_direct_url_from_bots_uses_fallback_query_variants(monkeypatch):
+    client = _FakeClient(
+        search_messages=[_msg("none", id=101)],
+        direct_messages=[_msg("https://cdn.example/song.mp3", id=201)],
+    )
+    calls = []
+
+    async def fake_resolve_search_result(_client, _search_bot, query, _wait_seconds):
+        if query == "Kendrick Lamar HUMBLE.":
+            return "https://t.me/c/123/456", None
+        return None, None
+
+    monkeypatch.setenv("TELEGRAM_API_ID", "123")
+    monkeypatch.setenv("TELEGRAM_API_HASH", "hash")
+    monkeypatch.setenv("TELEGRAM_STRING_SESSION", "session")
+    monkeypatch.delenv("TELEGRAM_SESSION_PATH", raising=False)
+    monkeypatch.setenv("MT_PROTO_WAIT_SECONDS", "0")
+    monkeypatch.setattr(mtproto.asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(mtproto, "_resolve_search_result", fake_resolve_search_result)
+    monkeypatch.setitem(sys.modules, "telethon", SimpleNamespace(TelegramClient=_FakeTelegramClientFactory(client, calls)))
+    monkeypatch.setitem(sys.modules, "telethon.sessions", SimpleNamespace(StringSession=_FakeStringSession))
+
+    result = asyncio.run(resolve_direct_url_from_bots("Kendrick Lamar - HUMBLE."))
+
+    assert result == "https://cdn.example/song.mp3"
+    assert client.sent == [("LinkFilesBot", "https://t.me/c/123/456")]
 
 
 def test_resolve_direct_url_from_bots_skips_search_for_message_url(monkeypatch):

@@ -135,6 +135,8 @@ def _first_result_button_coords(message: Any) -> tuple[int, int] | None:
             data_text = data.decode("utf-8", errors="ignore") if isinstance(data, (bytes, bytearray)) else str(data or "")
             if text.isdigit() and data_text.startswith("a:"):
                 return row_index, col_index
+            if re.match(r"^\d+\.", text) and data_text.startswith("download:"):
+                return row_index, col_index
     return None
 
 
@@ -217,6 +219,32 @@ def _direct_response_ready(messages: list[Any]) -> bool:
     return bool(_first_non_telegram_url(messages))
 
 
+def _search_queries(query: str) -> list[str]:
+    normalized = " ".join(str(query or "").strip().split())
+    if not normalized:
+        return []
+
+    variants = [normalized]
+    if " - " in normalized:
+        left, right = [part.strip() for part in normalized.split(" - ", 1)]
+        variants.append(f"{left} {right}")
+
+    cleaned = re.sub(r"[^\w\s]", " ", normalized, flags=re.UNICODE)
+    cleaned = " ".join(cleaned.split())
+    if cleaned and cleaned not in variants:
+        variants.append(cleaned)
+
+    deduped = []
+    seen = set()
+    for item in variants:
+        key = item.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
 async def _resolve_search_result(client: Any, search_bot: str, query: str, wait_seconds: float) -> tuple[str | None, Any | None]:
     sent_to_search = await client.send_message(search_bot, query)
     search_messages = await _collect_new_messages(
@@ -270,7 +298,7 @@ async def resolve_direct_url_from_bots(query: str) -> str:
         raise RuntimeError("TELEGRAM_API_ID, TELEGRAM_API_HASH and TELEGRAM_STRING_SESSION or TELEGRAM_SESSION_PATH are required")
 
     api_id = int(api_id_raw)
-    search_bot = os.getenv("VKMUSIC_BOT_USERNAME", "vkmusic_bot").lstrip("@")
+    search_bot = os.getenv("VKMUSIC_BOT_USERNAME", "MusicDownloaderRobot").lstrip("@")
     direct_bot = os.getenv("DIRECT_DOWNLOAD_BOT_USERNAME", "LinkFilesBot").lstrip("@")
     wait_seconds = float(os.getenv("MT_PROTO_WAIT_SECONDS", "6"))
 
@@ -280,7 +308,10 @@ async def resolve_direct_url_from_bots(query: str) -> str:
         candidate = str(query or "").strip()
         document_message = None
         if not _is_telegram_url(candidate):
-            candidate, document_message = await _resolve_search_result(client, search_bot, candidate, wait_seconds)
+            for search_query in _search_queries(candidate):
+                candidate, document_message = await _resolve_search_result(client, search_bot, search_query, wait_seconds)
+                if candidate or document_message is not None:
+                    break
             if not candidate and document_message is None:
                 raise RuntimeError("No result link or document found in search bot response")
 

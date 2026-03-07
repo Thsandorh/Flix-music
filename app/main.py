@@ -623,32 +623,7 @@ def _expand_direct_stream_url(url: str) -> str:
         redirected = str(query_params.get("url") or "").strip()
         return redirected or normalized
 
-    if host not in {"clck.ru", "www.clck.ru"}:
-        return normalized
-
-    response = None
-    try:
-        response = _session.get(
-            normalized,
-            allow_redirects=False,
-            stream=True,
-            headers={"User-Agent": SETTINGS.user_agent},
-            timeout=SETTINGS.timeout_s,
-        )
-        location = str((getattr(response, "headers", {}) or {}).get("Location") or "").strip()
-        if location:
-            location_parsed = urlparse(location)
-            location_params = dict(parse_qsl(location_parsed.query, keep_blank_values=True))
-            redirected = str(location_params.get("url") or location).strip()
-            return redirected or normalized
-        return normalized
-    except requests.RequestException:
-        logger.debug("Shortlink expansion failed for %s", normalized)
-        return normalized
-    finally:
-        close = getattr(response, "close", None)
-        if callable(close):
-            close()
+    return normalized
 
 
 def _build_stream_item(url: str, track_ref: dict[str, str]) -> dict[str, Any]:
@@ -688,6 +663,12 @@ def _stream_payload(type: str, id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Stream not found")
 
     track_ref = _decode_track_id(id)
+    try:
+        _resolve_direct_stream_url(id)
+    except HTTPException as exc:
+        logger.info("Skipping stream for %s - %s because direct resolution failed: %s", track_ref.get("artist"), track_ref.get("title"), exc.detail)
+        return {"streams": []}
+
     return {"streams": [_build_stream_item(_playback_url(id), track_ref)]}
 
 

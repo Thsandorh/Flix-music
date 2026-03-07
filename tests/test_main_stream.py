@@ -26,15 +26,27 @@ def test_stream_returns_proxy_url(monkeypatch):
     assert payload["streams"][0]["behaviorHints"]["notWebReady"] is True
 
 
-def test_stream_returns_proxy_url_without_resolving(monkeypatch):
+def test_stream_returns_proxy_url_when_resolution_succeeds(monkeypatch):
     track_id = main._build_track_id(artist="Daft Punk", title="One More Time")
-    monkeypatch.setattr(main, "_find_mapping_entry", lambda _track_ref, _id: None)
-    monkeypatch.setattr(main, "_DIRECT_URL_CACHE", {})
+    monkeypatch.setattr(main, "_resolve_direct_stream_url", lambda _id: "https://cdn.example/resolved.mp3")
 
     payload = main.stream("movie", track_id)
 
     assert payload["streams"][0]["url"] == main._playback_url(track_id)
     assert payload["streams"][0]["behaviorHints"]["notWebReady"] is True
+
+
+def test_stream_returns_empty_when_resolution_fails(monkeypatch):
+    track_id = main._build_track_id(artist="Daft Punk", title="One More Time")
+
+    def boom(_id):
+        raise HTTPException(status_code=502, detail="No result link or document found in search bot response")
+
+    monkeypatch.setattr(main, "_resolve_direct_stream_url", boom)
+
+    payload = main.stream("movie", track_id)
+
+    assert payload == {"streams": []}
 
 
 def test_play_resolves_via_mtproto(monkeypatch):
@@ -55,7 +67,6 @@ def test_play_resolves_via_mtproto(monkeypatch):
 
 def test_stream_uses_proxy_url_even_with_cached_mtproto_result(monkeypatch):
     track_id = main._build_track_id(artist="Daft Punk", title="One More Time")
-    monkeypatch.setattr(main, "_find_mapping_entry", lambda _track_ref, _id: None)
     monkeypatch.setattr(main, "_DIRECT_URL_CACHE", {track_id: (time.time() + 60, "https://cdn.example/cached.mp3")})
 
     payload = main.stream("movie", track_id)
@@ -63,25 +74,8 @@ def test_stream_uses_proxy_url_even_with_cached_mtproto_result(monkeypatch):
     assert payload["streams"][0]["url"] == main._playback_url(track_id)
     assert payload["streams"][0]["behaviorHints"]["notWebReady"] is True
 
-def test_expand_direct_stream_url_resolves_shortlink(monkeypatch):
-    class FakeResponse:
-        headers = {
-            "Location": "https://sba.yandex.ru/redirect?url=https%3A%2F%2Fsite--linkfilesbot--gb24qxlnkkt9.code.run%2Fdownload%2F1727896"
-        }
-
-        def close(self):
-            return None
-
-    class FakeSession:
-        def get(self, url, allow_redirects, stream, headers, timeout):
-            assert url == "https://clck.ru/test"
-            assert allow_redirects is False
-            assert stream is True
-            return FakeResponse()
-
-    monkeypatch.setattr(main, "_session", FakeSession())
-
-    assert main._expand_direct_stream_url("https://clck.ru/test") == "https://site--linkfilesbot--gb24qxlnkkt9.code.run/download/1727896"
+def test_expand_direct_stream_url_preserves_shortlink():
+    assert main._expand_direct_stream_url("https://clck.ru/test") == "https://clck.ru/test"
 
 
 def test_stream_expands_shortlink_to_final_media_url(monkeypatch):
