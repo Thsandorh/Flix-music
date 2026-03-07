@@ -623,6 +623,33 @@ def _expand_direct_stream_url(url: str) -> str:
         redirected = str(query_params.get("url") or "").strip()
         return redirected or normalized
 
+    if host not in {"clck.ru", "www.clck.ru"}:
+        return normalized
+
+    response = None
+    try:
+        response = _session.get(
+            normalized,
+            allow_redirects=False,
+            stream=True,
+            headers={"User-Agent": SETTINGS.user_agent},
+            timeout=SETTINGS.timeout_s,
+        )
+        location = str((getattr(response, "headers", {}) or {}).get("Location") or "").strip()
+        if not location:
+            return normalized
+        location_parsed = urlparse(location)
+        location_params = dict(parse_qsl(location_parsed.query, keep_blank_values=True))
+        redirected = str(location_params.get("url") or location).strip()
+        return redirected or normalized
+    except requests.RequestException:
+        logger.debug("Shortlink expansion failed for %s", normalized)
+        return normalized
+    finally:
+        close = getattr(response, "close", None)
+        if callable(close):
+            close()
+
     return normalized
 
 
