@@ -491,22 +491,89 @@ def configure() -> str:
   <meta charset="utf-8">
   <title>Flix-music Configure</title>
   <style>
-    body { font-family: Segoe UI, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 20px; background: #0f172a; color: #e5e7eb; }
+    body { font-family: Segoe UI, sans-serif; max-width: 920px; margin: 40px auto; padding: 0 20px 40px; background: #0f172a; color: #e5e7eb; }
     .card { background: #111827; border: 1px solid #374151; border-radius: 16px; padding: 24px; }
+    .stack { display: grid; gap: 20px; }
+    .grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+    .addon-list { display: grid; gap: 12px; }
+    .addon { padding-top: 12px; border-top: 1px solid #1f2937; }
+    .addon:first-child { padding-top: 0; border-top: 0; }
+    .links { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; }
+    .links a { word-break: normal; }
     input { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #4b5563; background: #030712; color: #fff; }
     button { margin-top: 12px; padding: 12px 16px; border: 0; border-radius: 10px; background: #22c55e; color: #052e16; font-weight: 700; cursor: pointer; }
     a { color: #93c5fd; word-break: break-all; }
     .muted { color: #9ca3af; }
+    h2 { margin: 0 0 12px; font-size: 1.1rem; }
+    h3 { margin: 0; font-size: 1rem; }
+    p { line-height: 1.5; }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>Flix-music configuration</h1>
-    <p class="muted">Enter a Last.fm username to enable personal Loved, Recent and Top Tracks catalogs.</p>
-    <label for="lastfmUser">Last.fm username</label>
-    <input id="lastfmUser" placeholder="your-lastfm-username" />
-    <button type="button" onclick="buildUrl()">Generate manifest URL</button>
-    <p id="out" style="margin-top:16px"></p>
+  <div class="stack">
+    <div class="card">
+      <h1>Flix-music configuration</h1>
+      <p class="muted">Enter a Last.fm username to enable personal Loved, Recent and Top Tracks catalogs.</p>
+      <label for="lastfmUser">Last.fm username</label>
+      <input id="lastfmUser" placeholder="your-lastfm-username" />
+      <button type="button" onclick="buildUrl()">Generate manifest URL</button>
+      <p id="out" style="margin-top:16px"></p>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <h2>Community</h2>
+        <p class="muted">Join the Discord or support the project on Ko-fi.</p>
+        <div class="links">
+          <a href="https://discord.com/invite/jfVJkxD2" target="_blank" rel="noreferrer">Discord</a>
+          <a href="https://ko-fi.com/flixnest" target="_blank" rel="noreferrer">Ko-fi</a>
+        </div>
+      </div>
+      <div class="card">
+        <h2>More add-ons</h2>
+        <div class="addon-list">
+          <div class="addon">
+            <h3>Flix feliratok</h3>
+            <div class="links">
+              <a href="https://flixnest.app/feliratok/configure" target="_blank" rel="noreferrer">Configure</a>
+              <a href="https://flixnest.app/feliratok/manifest.json" target="_blank" rel="noreferrer">Default</a>
+              <a href="https://github.com/Thsandorh/Fliss-feliratok" target="_blank" rel="noreferrer">GitHub</a>
+            </div>
+          </div>
+          <div class="addon">
+            <h3>Flix Catalogs</h3>
+            <div class="links">
+              <a href="https://flixnest.app/flix-catalogs/configure" target="_blank" rel="noreferrer">Configure</a>
+              <a href="https://flixnest.app/flix-catalogs/manifest.json" target="_blank" rel="noreferrer">Default</a>
+              <a href="https://github.com/Thsandorh/Flix-catalogs" target="_blank" rel="noreferrer">GitHub</a>
+            </div>
+          </div>
+          <div class="addon">
+            <h3>Flix Finder</h3>
+            <div class="links">
+              <a href="https://flixnest.app/flix-finder/configure" target="_blank" rel="noreferrer">Configure</a>
+              <a href="https://flixnest.app/flix-finder/manifest.json" target="_blank" rel="noreferrer">Default</a>
+              <a href="https://github.com/Thsandorh/flix-finder" target="_blank" rel="noreferrer">GitHub</a>
+            </div>
+          </div>
+          <div class="addon">
+            <h3>HDMozi</h3>
+            <div class="links">
+              <a href="https://flixnest.app/hd-mozi/configure" target="_blank" rel="noreferrer">Configure</a>
+              <a href="https://flixnest.app/hd-mozi/manifest.json" target="_blank" rel="noreferrer">Default</a>
+              <a href="https://github.com/Thsandorh/hdmozi-stremio" target="_blank" rel="noreferrer">GitHub</a>
+            </div>
+          </div>
+          <div class="addon">
+            <h3>nCore</h3>
+            <div class="links">
+              <a href="https://flixnest.app/ncore/configure" target="_blank" rel="noreferrer">Configure</a>
+              <a href="https://flixnest.app/ncore/manifest.json" target="_blank" rel="noreferrer">Default</a>
+              <a href="https://github.com/Thsandorh/Flix-ncore-addon" target="_blank" rel="noreferrer">GitHub</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
   <script>
     function base64UrlEncode(value) {
