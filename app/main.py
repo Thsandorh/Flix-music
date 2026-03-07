@@ -8,6 +8,7 @@ from typing import Any
 
 import requests
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -195,6 +196,11 @@ def _recording_search_query(mbid: str) -> str:
     year = release_date[:4] if release_date else None
 
     return build_recording_search_query(title=title, artist=artist, year=year)
+
+
+@app.get("/")
+def root() -> RedirectResponse:
+    return RedirectResponse(url="/manifest.json", status_code=307)
 
 
 @app.get("/manifest.json")

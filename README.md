@@ -34,6 +34,8 @@ MUSICBRAINZ_USER_AGENT="FlixMusicStremioAddon/0.8 (your-contact@example.com)"
 TELEGRAM_API_ID="123456"
 TELEGRAM_API_HASH="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 TELEGRAM_STRING_SESSION="<telethon_string_session>"
+# or point to an existing Telethon sqlite session file
+TELEGRAM_SESSION_PATH="~/telegram_bridge/flix_session"
 ```
 
 ## Optional environment variables
@@ -51,7 +53,7 @@ VKMUSIC_BOT_USERNAME="vkmusic_bot"
 DIRECT_DOWNLOAD_BOT_USERNAME="LinkFilesBot"
 
 # bot response wait interval
-MT_PROTO_WAIT_SECONDS="2.5"
+MT_PROTO_WAIT_SECONDS="6"
 ```
 
 ## Optional static mapping
@@ -64,6 +66,23 @@ If a direct link is already known, it can be hardcoded in `HARDCODED_TELEGRAM_MA
     "direct_url": "https://cdn.example/song.mp3"
   }
 }
+```
+
+## Generate Telegram session
+
+Use the helper script when you need a fresh `TELEGRAM_STRING_SESSION`:
+
+```powershell
+python scripts\generate_telegram_session.py --api-id 123456 --api-hash your_telegram_api_hash
+```
+
+Optional non-interactive inputs:
+
+```powershell
+$env:TELEGRAM_PHONE="+36123456789"
+$env:TELEGRAM_LOGIN_CODE="12345"
+$env:TELEGRAM_2FA_PASSWORD="your-password"
+python scripts\generate_telegram_session.py --api-id 123456 --api-hash your_telegram_api_hash
 ```
 
 ## Local run
