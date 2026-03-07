@@ -504,7 +504,7 @@ def configure() -> str:
     <h1>Flix-music configuration</h1>
     <p class=\"muted\">Enter a Last.fm username to enable personal Loved, Recent and Top Tracks catalogs.</p>
     <label for=\"lastfmUser\">Last.fm username</label>
-    <input id=\"lastfmUser\" placeholder=\"sandor555\" />
+    <input id=\"lastfmUser\" placeholder=\"your-lastfm-username\" />
     <button type=\"button\" onclick=\"buildUrl()\">Generate manifest URL</button>
     <p id=\"out\" style=\"margin-top:16px\"></p>
   </div>
