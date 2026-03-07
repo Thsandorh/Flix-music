@@ -1,48 +1,21 @@
 # Flix-music
 
-Production-oriented Stremio addon (FastAPI) that uses:
+Production-oriented Stremio addon (FastAPI) with:
 
-- **MusicBrainz** as catalog/metadata provider (equivalent role to TMDB in movie addons).
-- **Telegram** as playback target provider (direct links, message links, and metadata-based search fallback).
+- **MusicBrainz** for catalog and metadata.
+- **MTProto bot chain** for automatic Telegram direct-link resolution.
 
-## How this maps to Stremio architecture
+## Core behavior
 
-For Stremio, three endpoints define the full experience:
+When a direct URL is not already mapped for a MusicBrainz recording, the addon does **not** return browser bot links.
 
-1. `catalog` → what users browse/search in the UI.
-2. `meta` → details for a selected catalog item.
-3. `stream` → playable target(s) for that item.
+Instead, it resolves a playable stream URL automatically using MTProto:
 
-In this addon:
-
-- `catalog` and `meta` are assembled from **MusicBrainz recording data**.
-- `catalog` has three lanes:
-  - `musicbrainz-popular` → query: `tag:pop OR tag:rock`
-  - `musicbrainz-recent` → query: `date:[2023 TO *]`
-  - `musicbrainz-search` → query from `search` extra (or fallback `tag:music`)
-- `stream` uses Telegram links from mapping.
-- if no direct mapping exists, it first uses the **exact search phrase** entered by the user in Stremio search (cached hint).
-- it then exposes two bot handoff links: search bot + direct-download bot.
-- if no search hint exists, it falls back to metadata query by name (+ year).
-
-## Key behavior requested
-
-No bot token is required.
-
-When a recording has no direct mapping:
-
-1. If the user reached the item through Stremio search, addon reuses the same search phrase exactly.
-2. It returns handoff links for:
-   - `@vkmusic_bot` search
-   - direct-download bot (`@LinkFilesBot` by default)
-3. If search phrase is unavailable, it generates fallback query from metadata:
-   - Artist name
-   - Track title
-   - Release year (if available)
-
-Example fallback generated search query:
-
-`Daft Punk - One More Time 2000`
+1. Send user search phrase (or metadata-derived query) to `@vkmusic_bot`.
+2. Take the returned candidate.
+3. Send that candidate to direct-download bot (`@LinkFilesBot` by default).
+4. Extract direct playable URL from bot response.
+5. Return that URL in `/stream` as Stremio `url`.
 
 ## Endpoints
 
@@ -54,17 +27,16 @@ Example fallback generated search query:
 - `GET /meta/movie/mb:<recording-id>.json`
 - `GET /stream/movie/mb:<recording-id>.json`
 
-## Environment variables
-
-### Required
+## Required environment variables
 
 ```bash
-MUSICBRAINZ_USER_AGENT="FlixMusicStremioAddon/0.5 (your-contact@example.com)"
+MUSICBRAINZ_USER_AGENT="FlixMusicStremioAddon/0.8 (your-contact@example.com)"
 TELEGRAM_API_ID="123456"
 TELEGRAM_API_HASH="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+TELEGRAM_STRING_SESSION="<telethon_string_session>"
 ```
 
-### Optional tuning (recommended for production)
+## Optional environment variables
 
 ```bash
 MUSICBRAINZ_BASE="https://musicbrainz.org/ws/2"
@@ -73,50 +45,26 @@ HTTP_TIMEOUT_SECONDS="15"
 MB_CACHE_TTL_SECONDS="120"
 LOG_LEVEL="INFO"
 SEARCH_HINT_TTL_SECONDS="1800"
+
+# bot usernames (without @ is also accepted)
+VKMUSIC_BOT_USERNAME="vkmusic_bot"
+DIRECT_DOWNLOAD_BOT_USERNAME="LinkFilesBot"
+
+# bot response wait interval
+MT_PROTO_WAIT_SECONDS="2.5"
 ```
 
-### Optional Telegram URL templates
+## Optional static mapping
 
-```bash
-# fallback when recording has no mapping and metadata lookup fails
-LINKFILESBOT_URL_TEMPLATE="https://t.me/LinkFilesBot?start={recording_id}"
-
-# metadata-based fallback search URL
-# placeholders: {query}, {query_encoded}
-TELEGRAM_SEARCH_URL_TEMPLATE="https://t.me/vkmusic_bot?start={query_encoded}"
-
-# handoff to direct-download bot
-DIRECT_DOWNLOAD_BOT_URL_TEMPLATE="https://t.me/LinkFilesBot?start={query_encoded}"
-```
-
-### Built-in hardcoded mapping (default)
-
-This addon now works without `TELEGRAM_FILE_MAPPING`.
-
-Default behavior:
-- define static mappings directly in `app/main.py` under `HARDCODED_TELEGRAM_MAPPING`
-- optionally override/extend with `TELEGRAM_FILE_MAPPING` env
-
-Mapping key = MusicBrainz recording ID.
+If a direct link is already known, it can be hardcoded in `HARDCODED_TELEGRAM_MAPPING` (`app/main.py`) or set via `TELEGRAM_FILE_MAPPING`.
 
 ```json
 {
-  "f4d5f6bb-4f95-4a20-9f0a-99f9e1f5f111": {
-    "direct_url": "https://cdn.example.com/song.mp3"
-  },
-  "9cb73623-c4ff-4e5f-b1a0-4b7e6f3140da": {
-    "message_url": "https://t.me/c/123456/789"
+  "<musicbrainz-recording-id>": {
+    "direct_url": "https://cdn.example/song.mp3"
   }
 }
 ```
-
-Supported forms:
-
-- URL string:
-  - `https://...` → `direct_url`
-  - `https://t.me/...` → `message_url`
-- Object:
-  - `{ "direct_url": "...", "message_url": "..." }`
 
 ## Local run
 
@@ -129,31 +77,20 @@ uvicorn app.main:app --host 0.0.0.0 --port 7000
 
 ## Vercel deployment
 
-This repository includes:
+Repository includes:
 
 - `api/index.py` (ASGI entrypoint)
 - `vercel.json` (routes/build)
 
-Steps:
+Deploy steps:
 
 1. Import repository into Vercel.
-2. Configure required env vars.
-   - `TELEGRAM_FILE_MAPPING` is optional (env override).
+2. Set required env vars.
 3. Deploy.
-4. Verify:
-   - `/healthz`
-   - `/manifest.json`
-
-## Reliability hardening included
-
-- HTTP retries for transient MusicBrainz errors (429/5xx).
-- Configurable request timeout.
-- In-memory TTL cache for MusicBrainz responses.
-- Explicit 502 response mapping for upstream request failures.
-- Health endpoint includes credential, mapping, cache and search-hint visibility.
+4. Verify `/healthz` and `/manifest.json`.
 
 ## Notes
 
-- This is still a lightweight service (no persistent DB/admin UI).
-- For high-scale production, use external cache/storage and observability.
-- Content licensing/compliance remains operator responsibility.
+- MTProto flow requires a valid authenticated user `TELEGRAM_STRING_SESSION`.
+- Stream resolution returns playable `url` links (no `externalUrl` browser handoff).
+- For scale, replace in-memory caches with external storage.

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -11,14 +12,12 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from app.helpers import (
-    build_direct_download_bot_url,
-    build_linkfilesbot_url,
     build_recording_search_query,
-    build_telegram_search_url,
     env_mapping,
     has_telegram_app_credentials,
     safe_artist_string,
 )
+from app.mtproto import resolve_direct_url_from_bots
 
 logger = logging.getLogger("flix_music")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -116,7 +115,7 @@ def _mapping() -> dict[str, dict[str, str]]:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-def _recording_search_url(mbid: str) -> str:
+def _recording_search_query(mbid: str) -> str:
     rec = _mb_get(f"recording/{mbid}", {"inc": "artists+releases"})
     title = rec.get("title", "")
     artist = safe_artist_string(rec.get("artist-credit"))
@@ -127,15 +126,14 @@ def _recording_search_url(mbid: str) -> str:
         release_date = str(releases[0].get("date", ""))
     year = release_date[:4] if release_date else None
 
-    query = build_recording_search_query(title=title, artist=artist, year=year)
-    return build_telegram_search_url(query)
+    return build_recording_search_query(title=title, artist=artist, year=year)
 
 
 @app.get("/manifest.json")
 def manifest() -> dict[str, Any]:
     return {
         "id": "community.musicbrainz.telegram",
-        "version": "0.7.0",
+        "version": "0.8.0",
         "name": "MusicBrainz + Telegram",
         "description": "Music catalog from MusicBrainz and Telegram playback links.",
         "resources": ["catalog", "meta", "stream"],
@@ -172,6 +170,7 @@ def healthz() -> dict[str, Any]:
         "mapping_entries": len(_mapping()),
         "cache_entries": len(_MB_CACHE),
         "search_hints": len(_SEARCH_HINTS),
+        "mtproto_ready": bool(os.getenv("TELEGRAM_STRING_SESSION")),
     }
 
 
@@ -288,43 +287,26 @@ def stream(type: str, id: str) -> dict[str, Any]:
         return {"streams": [{"title": "Direct URL", "url": entry["direct_url"]}]}
 
     if entry and "message_url" in entry:
-        return {
-            "streams": [
-                {
-                    "title": "Telegram message link",
-                    "externalUrl": entry["message_url"],
-                }
-            ]
-        }
+        query = entry["message_url"]
+    else:
+        # No direct mapping: resolve playable link through MTProto bot chain.
+        query = _search_hint_for_mbid(mbid)
+    if not query:
+        try:
+            query = _recording_search_query(mbid)
+        except requests.RequestException as exc:
+            raise HTTPException(status_code=502, detail=f"MusicBrainz request failed: {exc}") from exc
 
-    # No direct mapping: prioritize exact user search phrase from catalog search context.
-    query_hint = _search_hint_for_mbid(mbid)
-
-    if query_hint:
-        return {
-            "streams": [
-                {
-                    "title": "Search phrase on VKMusic bot",
-                    "externalUrl": build_telegram_search_url(query_hint),
-                },
-                {
-                    "title": "Send phrase to direct download bot",
-                    "externalUrl": build_direct_download_bot_url(query_hint),
-                },
-            ]
-        }
-
-    # Fallback: build query from recording metadata (artist + title + year).
     try:
-        metadata_query_url = _recording_search_url(mbid)
-    except requests.RequestException:
-        metadata_query_url = build_linkfilesbot_url(mbid)
+        direct_url = asyncio.run(resolve_direct_url_from_bots(query))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"MTProto bot chain failed: {exc}") from exc
 
     return {
         "streams": [
             {
-                "title": "Search on Telegram (artist/title/year)",
-                "externalUrl": metadata_query_url,
+                "title": "MTProto resolved direct stream",
+                "url": direct_url,
             }
         ]
     }
