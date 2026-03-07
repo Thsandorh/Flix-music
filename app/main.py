@@ -54,6 +54,13 @@ _session.mount("http://", HTTPAdapter(max_retries=_retry))
 # very small in-memory cache: key -> (expires_at, payload)
 _MB_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
+# Optional built-in static mapping. Add MBID -> direct/message URL entries here.
+# This allows operation without TELEGRAM_FILE_MAPPING env.
+HARDCODED_TELEGRAM_MAPPING: dict[str, dict[str, str]] = {
+    # "<musicbrainz-recording-id>": {"direct_url": "https://..."},
+    # "<musicbrainz-recording-id>": {"message_url": "https://t.me/..."},
+}
+
 
 def _cache_key(path: str, params: dict[str, Any]) -> str:
     ordered = "&".join(f"{k}={params[k]}" for k in sorted(params))
@@ -88,9 +95,16 @@ def _poster_from_release(release_id: str | None) -> str | None:
 
 
 def _mapping() -> dict[str, dict[str, str]]:
-    raw = os.getenv("TELEGRAM_FILE_MAPPING", "{}")
+    """Return effective mapping from hardcoded defaults + optional env override."""
+    mapping = dict(HARDCODED_TELEGRAM_MAPPING)
+
+    raw = os.getenv("TELEGRAM_FILE_MAPPING", "").strip()
+    if not raw:
+        return mapping
+
     try:
-        return env_mapping(raw)
+        mapping.update(env_mapping(raw))
+        return mapping
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=500, detail=f"Invalid TELEGRAM_FILE_MAPPING JSON: {exc}") from exc
     except ValueError as exc:
