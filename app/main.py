@@ -525,7 +525,7 @@ def configure() -> str:
         <p class="muted">Join the Discord or support the project on Ko-fi.</p>
         <div class="links">
           <a href="https://discord.com/invite/jfVJkxD2" target="_blank" rel="noreferrer">Discord</a>
-          <a href="https://ko-fi.com/flixnest" target="_blank" rel="noreferrer">Ko-fi</a>
+          <a href="https://ko-fi.com/sandortoth" target="_blank" rel="noreferrer">Ko-fi</a>
         </div>
       </div>
       <div class="card">

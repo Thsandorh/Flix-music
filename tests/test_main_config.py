@@ -51,7 +51,7 @@ def test_configure_page_contains_working_markup():
     assert 'onclick="buildUrl()"' in html
     assert '\\"' not in html
     assert 'https://discord.com/invite/jfVJkxD2' in html
-    assert 'https://ko-fi.com/flixnest' in html
+    assert 'https://ko-fi.com/sandortoth' in html
     assert 'https://flixnest.app/flix-streams/configure' in html
     assert 'https://flixnest.app/flix-catalogs/configure' in html
     assert 'https://github.com/Thsandorh/Flix-ncore-addon' in html
