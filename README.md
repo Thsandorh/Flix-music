@@ -20,19 +20,27 @@ In this addon:
   - `musicbrainz-popular` → query: `tag:pop OR tag:rock`
   - `musicbrainz-recent` → query: `date:[2023 TO *]`
   - `musicbrainz-search` → query from `search` extra (or fallback `tag:music`)
-- `stream` uses Telegram links from mapping, and if absent, builds a **Telegram search query by name (+ year)**.
+- `stream` uses Telegram links from mapping.
+- if no direct mapping exists, it first uses the **exact search phrase** entered by the user in Stremio search (cached hint).
+- it then exposes two bot handoff links: search bot + direct-download bot.
+- if no search hint exists, it falls back to metadata query by name (+ year).
 
 ## Key behavior requested
 
 No bot token is required.
 
-When a recording has no direct mapping, stream fallback is generated from MusicBrainz metadata using:
+When a recording has no direct mapping:
 
-- Artist name
-- Track title
-- Release year (if available)
+1. If the user reached the item through Stremio search, addon reuses the same search phrase exactly.
+2. It returns handoff links for:
+   - `@vkmusic_bot` search
+   - direct-download bot (`@LinkFilesBot` by default)
+3. If search phrase is unavailable, it generates fallback query from metadata:
+   - Artist name
+   - Track title
+   - Release year (if available)
 
-Example generated search query:
+Example fallback generated search query:
 
 `Daft Punk - One More Time 2000`
 
@@ -64,6 +72,7 @@ MUSICBRAINZ_SEARCH_LIMIT="20"
 HTTP_TIMEOUT_SECONDS="15"
 MB_CACHE_TTL_SECONDS="120"
 LOG_LEVEL="INFO"
+SEARCH_HINT_TTL_SECONDS="1800"
 ```
 
 ### Optional Telegram URL templates
@@ -75,6 +84,9 @@ LINKFILESBOT_URL_TEMPLATE="https://t.me/LinkFilesBot?start={recording_id}"
 # metadata-based fallback search URL
 # placeholders: {query}, {query_encoded}
 TELEGRAM_SEARCH_URL_TEMPLATE="https://t.me/vkmusic_bot?start={query_encoded}"
+
+# handoff to direct-download bot
+DIRECT_DOWNLOAD_BOT_URL_TEMPLATE="https://t.me/LinkFilesBot?start={query_encoded}"
 ```
 
 ### Built-in hardcoded mapping (default)
@@ -138,7 +150,7 @@ Steps:
 - Configurable request timeout.
 - In-memory TTL cache for MusicBrainz responses.
 - Explicit 502 response mapping for upstream request failures.
-- Health endpoint includes credential and mapping visibility.
+- Health endpoint includes credential, mapping, cache and search-hint visibility.
 
 ## Notes
 

@@ -11,6 +11,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from app.helpers import (
+    build_direct_download_bot_url,
     build_linkfilesbot_url,
     build_recording_search_query,
     build_telegram_search_url,
@@ -60,6 +61,10 @@ HARDCODED_TELEGRAM_MAPPING: dict[str, dict[str, str]] = {
     # "<musicbrainz-recording-id>": {"direct_url": "https://..."},
     # "<musicbrainz-recording-id>": {"message_url": "https://t.me/..."},
 }
+
+# search context cache: recording_mbid -> user-entered search phrase
+_SEARCH_HINTS: dict[str, tuple[float, str]] = {}
+_SEARCH_HINT_TTL_SECONDS = int(os.getenv("SEARCH_HINT_TTL_SECONDS", "1800"))
 
 
 def _cache_key(path: str, params: dict[str, Any]) -> str:
@@ -130,7 +135,7 @@ def _recording_search_url(mbid: str) -> str:
 def manifest() -> dict[str, Any]:
     return {
         "id": "community.musicbrainz.telegram",
-        "version": "0.6.0",
+        "version": "0.7.0",
         "name": "MusicBrainz + Telegram",
         "description": "Music catalog from MusicBrainz and Telegram playback links.",
         "resources": ["catalog", "meta", "stream"],
@@ -166,7 +171,30 @@ def healthz() -> dict[str, Any]:
         "telegram_app_credentials": has_telegram_app_credentials(),
         "mapping_entries": len(_mapping()),
         "cache_entries": len(_MB_CACHE),
+        "search_hints": len(_SEARCH_HINTS),
     }
+
+
+def _remember_search_hints(search: str | None, recordings: list[dict[str, Any]]) -> None:
+    if not search or not search.strip():
+        return
+
+    now = time.time()
+    phrase = search.strip()
+    for rec in recordings:
+        rec_id = rec.get("id")
+        if rec_id:
+            _SEARCH_HINTS[str(rec_id)] = (now + _SEARCH_HINT_TTL_SECONDS, phrase)
+
+
+def _search_hint_for_mbid(mbid: str) -> str | None:
+    data = _SEARCH_HINTS.get(mbid)
+    if not data:
+        return None
+    if data[0] < time.time():
+        _SEARCH_HINTS.pop(mbid, None)
+        return None
+    return data[1]
 
 
 def _catalog_query(catalog_id: str, search: str | None) -> str:
@@ -200,8 +228,11 @@ def catalog(type: str, catalog_id: str, search: str | None = None) -> dict[str, 
         logger.exception("MusicBrainz catalog query failed")
         raise HTTPException(status_code=502, detail=f"MusicBrainz request failed: {exc}") from exc
 
+    recordings = data.get("recordings", [])
+    _remember_search_hints(search=search, recordings=recordings)
+
     metas = []
-    for rec in data.get("recordings", []):
+    for rec in recordings:
         rels = rec.get("releases", [])
         first_release = rels[0]["id"] if rels else None
         artist = safe_artist_string(rec.get("artist-credit"))
@@ -266,17 +297,34 @@ def stream(type: str, id: str) -> dict[str, Any]:
             ]
         }
 
-    # No mbid-based stream mapping: build Telegram search from recording metadata (artist + title + year).
+    # No direct mapping: prioritize exact user search phrase from catalog search context.
+    query_hint = _search_hint_for_mbid(mbid)
+
+    if query_hint:
+        return {
+            "streams": [
+                {
+                    "title": "Search phrase on VKMusic bot",
+                    "externalUrl": build_telegram_search_url(query_hint),
+                },
+                {
+                    "title": "Send phrase to direct download bot",
+                    "externalUrl": build_direct_download_bot_url(query_hint),
+                },
+            ]
+        }
+
+    # Fallback: build query from recording metadata (artist + title + year).
     try:
-        telegram_search = _recording_search_url(mbid)
+        metadata_query_url = _recording_search_url(mbid)
     except requests.RequestException:
-        telegram_search = build_linkfilesbot_url(mbid)
+        metadata_query_url = build_linkfilesbot_url(mbid)
 
     return {
         "streams": [
             {
                 "title": "Search on Telegram (artist/title/year)",
-                "externalUrl": telegram_search,
+                "externalUrl": metadata_query_url,
             }
         ]
     }
