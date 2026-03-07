@@ -1,56 +1,90 @@
 import json
+import logging
 import os
+import time
+from dataclasses import dataclass
 from typing import Any
 
 import requests
 from fastapi import FastAPI, HTTPException
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-from app.helpers import build_linkfilesbot_url, env_mapping, safe_artist_string
+from app.helpers import (
+    build_linkfilesbot_url,
+    build_recording_search_query,
+    build_telegram_search_url,
+    env_mapping,
+    has_telegram_app_credentials,
+    safe_artist_string,
+)
+
+logger = logging.getLogger("flix_music")
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+
+
+@dataclass(frozen=True)
+class Settings:
+    musicbrainz_base: str = os.getenv("MUSICBRAINZ_BASE", "https://musicbrainz.org/ws/2")
+    user_agent: str = os.getenv("MUSICBRAINZ_USER_AGENT", "FlixMusicStremioAddon/0.5 (contact@example.com)")
+    search_limit: int = int(os.getenv("MUSICBRAINZ_SEARCH_LIMIT", "20"))
+    timeout_s: int = int(os.getenv("HTTP_TIMEOUT_SECONDS", "15"))
+    cache_ttl_s: int = int(os.getenv("MB_CACHE_TTL_SECONDS", "120"))
+
+
+SETTINGS = Settings()
+
+if "contact@" in SETTINGS.user_agent or "example" in SETTINGS.user_agent:
+    logger.warning("MUSICBRAINZ_USER_AGENT should be customized for production deployments.")
 
 app = FastAPI(title="Stremio MusicBrainz + Telegram Addon")
 
-MUSICBRAINZ_BASE = "https://musicbrainz.org/ws/2"
-USER_AGENT = os.getenv(
-    "MUSICBRAINZ_USER_AGENT",
-    "FlixMusicStremioAddon/0.2 (you@example.com)",
+_session = requests.Session()
+_retry = Retry(
+    total=3,
+    connect=3,
+    read=3,
+    backoff_factor=0.3,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["GET"],
 )
+_session.mount("https://", HTTPAdapter(max_retries=_retry))
+_session.mount("http://", HTTPAdapter(max_retries=_retry))
+
+# very small in-memory cache: key -> (expires_at, payload)
+_MB_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def _cache_key(path: str, params: dict[str, Any]) -> str:
+    ordered = "&".join(f"{k}={params[k]}" for k in sorted(params))
+    return f"{path}?{ordered}"
 
 
 def _mb_get(path: str, params: dict[str, Any]) -> dict[str, Any]:
-    response = requests.get(
-        f"{MUSICBRAINZ_BASE}/{path}",
-        params={**params, "fmt": "json"},
-        headers={"User-Agent": USER_AGENT},
-        timeout=15,
+    req_params = {**params, "fmt": "json"}
+    key = _cache_key(path, req_params)
+    now = time.time()
+
+    cached = _MB_CACHE.get(key)
+    if cached and cached[0] > now:
+        return cached[1]
+
+    response = _session.get(
+        f"{SETTINGS.musicbrainz_base}/{path}",
+        params=req_params,
+        headers={"User-Agent": SETTINGS.user_agent},
+        timeout=SETTINGS.timeout_s,
     )
     response.raise_for_status()
-    return response.json()
+    payload = response.json()
+    _MB_CACHE[key] = (now + SETTINGS.cache_ttl_s, payload)
+    return payload
 
 
 def _poster_from_release(release_id: str | None) -> str | None:
     if not release_id:
         return None
     return f"https://coverartarchive.org/release/{release_id}/front-250"
-
-
-def _telegram_file_url(file_id: str) -> str:
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    if not bot_token:
-        raise HTTPException(status_code=500, detail="TELEGRAM_BOT_TOKEN is not configured")
-
-    response = requests.get(
-        f"https://api.telegram.org/bot{bot_token}/getFile",
-        params={"file_id": file_id},
-        timeout=10,
-    )
-    response.raise_for_status()
-    payload = response.json()
-
-    if not payload.get("ok"):
-        raise HTTPException(status_code=400, detail=f"Telegram error: {payload}")
-
-    file_path = payload["result"]["file_path"]
-    return f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
 
 
 def _mapping() -> dict[str, dict[str, str]]:
@@ -63,20 +97,47 @@ def _mapping() -> dict[str, dict[str, str]]:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+def _recording_search_url(mbid: str) -> str:
+    rec = _mb_get(f"recording/{mbid}", {"inc": "artists+releases"})
+    title = rec.get("title", "")
+    artist = safe_artist_string(rec.get("artist-credit"))
+
+    release_date = ""
+    releases = rec.get("releases", [])
+    if releases and isinstance(releases[0], dict):
+        release_date = str(releases[0].get("date", ""))
+    year = release_date[:4] if release_date else None
+
+    query = build_recording_search_query(title=title, artist=artist, year=year)
+    return build_telegram_search_url(query)
+
+
 @app.get("/manifest.json")
 def manifest() -> dict[str, Any]:
     return {
         "id": "community.musicbrainz.telegram",
-        "version": "0.2.0",
+        "version": "0.6.0",
         "name": "MusicBrainz + Telegram",
-        "description": "Music catalog from MusicBrainz and stream links from Telegram files.",
+        "description": "Music catalog from MusicBrainz and Telegram playback links.",
         "resources": ["catalog", "meta", "stream"],
         "types": ["movie"],
         "catalogs": [
             {
                 "type": "movie",
-                "id": "musicbrainz-recordings",
-                "name": "MusicBrainz recordings",
+                "id": "musicbrainz-popular",
+                "name": "Music - Popular",
+                "extra": [{"name": "search", "isRequired": False}],
+            },
+            {
+                "type": "movie",
+                "id": "musicbrainz-recent",
+                "name": "Music - Recent",
+                "extra": [{"name": "search", "isRequired": False}],
+            },
+            {
+                "type": "movie",
+                "id": "musicbrainz-search",
+                "name": "Music - Search",
                 "extra": [{"name": "search", "isRequired": False}],
             }
         ],
@@ -85,17 +146,45 @@ def manifest() -> dict[str, Any]:
 
 
 @app.get("/healthz")
-def healthz() -> dict[str, str]:
-    return {"status": "ok"}
+def healthz() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "telegram_app_credentials": has_telegram_app_credentials(),
+        "mapping_entries": len(_mapping()),
+        "cache_entries": len(_MB_CACHE),
+    }
+
+
+def _catalog_query(catalog_id: str, search: str | None) -> str:
+    if search and search.strip():
+        return search.strip()
+
+    if catalog_id == "musicbrainz-popular":
+        # MusicBrainz has no official trending endpoint like TMDB.
+        return "tag:pop OR tag:rock"
+
+    if catalog_id == "musicbrainz-recent":
+        # Approximate "new releases" by date range search.
+        return "date:[2023 TO *]"
+
+    if catalog_id == "musicbrainz-search":
+        return "tag:music"
+
+    raise HTTPException(status_code=404, detail="Catalog not found")
 
 
 @app.get("/catalog/{type}/{catalog_id}.json")
 def catalog(type: str, catalog_id: str, search: str | None = None) -> dict[str, Any]:
-    if type != "movie" or catalog_id != "musicbrainz-recordings":
+    if type != "movie":
         raise HTTPException(status_code=404, detail="Catalog not found")
 
-    query = search.strip() if search else "tag:rock"
-    data = _mb_get("recording", {"query": query, "limit": 20})
+    query = _catalog_query(catalog_id=catalog_id, search=search)
+
+    try:
+        data = _mb_get("recording", {"query": query, "limit": SETTINGS.search_limit})
+    except requests.RequestException as exc:
+        logger.exception("MusicBrainz catalog query failed")
+        raise HTTPException(status_code=502, detail=f"MusicBrainz request failed: {exc}") from exc
 
     metas = []
     for rec in data.get("recordings", []):
@@ -121,7 +210,11 @@ def meta(type: str, id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Meta not found")
 
     mbid = id[3:]
-    rec = _mb_get(f"recording/{mbid}", {"inc": "artists+releases"})
+    try:
+        rec = _mb_get(f"recording/{mbid}", {"inc": "artists+releases"})
+    except requests.RequestException as exc:
+        logger.exception("MusicBrainz meta query failed")
+        raise HTTPException(status_code=502, detail=f"MusicBrainz request failed: {exc}") from exc
 
     rels = rec.get("releases", [])
     first_release = rels[0]["id"] if rels else None
@@ -146,33 +239,30 @@ def stream(type: str, id: str) -> dict[str, Any]:
     mbid = id[3:]
     entry = _mapping().get(mbid)
 
-    if not entry:
-        # Fallback for your workflow: search/prepare in @vkmusic_bot and convert with @LinkFilesBot.
+    if entry and "direct_url" in entry:
+        return {"streams": [{"title": "Direct URL", "url": entry["direct_url"]}]}
+
+    if entry and "message_url" in entry:
         return {
             "streams": [
                 {
-                    "title": "No direct file yet - open LinkFilesBot",
-                    "externalUrl": build_linkfilesbot_url(mbid),
+                    "title": "Telegram message link",
+                    "externalUrl": entry["message_url"],
                 }
             ]
         }
 
-    if "direct_url" in entry:
-        return {
-            "streams": [
-                {
-                    "title": "Direct URL",
-                    "url": entry["direct_url"],
-                }
-            ]
-        }
+    # No mbid-based stream mapping: build Telegram search from recording metadata (artist + title + year).
+    try:
+        telegram_search = _recording_search_url(mbid)
+    except requests.RequestException:
+        telegram_search = build_linkfilesbot_url(mbid)
 
-    direct_url = _telegram_file_url(entry["file_id"])
     return {
         "streams": [
             {
-                "title": "Telegram bot file",
-                "url": direct_url,
+                "title": "Search on Telegram (artist/title/year)",
+                "externalUrl": telegram_search,
             }
         ]
     }
