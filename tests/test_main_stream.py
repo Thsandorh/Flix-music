@@ -78,78 +78,65 @@ def test_expand_direct_stream_url_resolves_shortlink(monkeypatch):
     monkeypatch.setattr(main, "_expand_shortlink_with_curl", lambda url: "")
 
     class FakeResponse:
-        headers = {
-            "Location": "https://sba.yandex.ru/redirect?url=https%3A%2F%2Fsite--linkfilesbot--gb24qxlnkkt9.code.run%2Fdownload%2F1727945"
-        }
+        def geturl(self):
+            return "https://sba.yandex.ru/redirect?url=https%3A%2F%2Fsite--linkfilesbot--gb24qxlnkkt9.code.run%2Fdownload%2F1727945"
 
         def close(self):
             return None
 
-    class FakeSession:
-        def get(self, url, allow_redirects, stream, headers, timeout):
-            assert url == "https://clck.ru/test"
-            assert allow_redirects is False
-            assert stream is True
+    class FakeOpener:
+        def open(self, request, timeout):
+            assert request.full_url == "https://clck.ru/test"
             return FakeResponse()
 
-    monkeypatch.setattr(main, "_session", FakeSession())
+    monkeypatch.setattr(main, "build_opener", lambda: FakeOpener())
 
     assert main._expand_direct_stream_url("https://clck.ru/test") == "https://site--linkfilesbot--gb24qxlnkkt9.code.run/download/1727945"
 
 
-def test_expand_direct_stream_url_keeps_shortlink_when_target_is_not_download(monkeypatch):
+
+def test_expand_direct_stream_url_keeps_shortlink_when_target_stays_shortener(monkeypatch):
     monkeypatch.setattr(main, "_expand_shortlink_with_curl", lambda url: "")
 
     class FakeResponse:
-        headers = {
-            "Location": "https://clck.ru/showcaptcha?x=1"
-        }
+        def geturl(self):
+            return "https://clck.ru/showcaptcha?x=1"
 
         def close(self):
             return None
 
-    class FakeSession:
-        def get(self, url, allow_redirects, stream, headers, timeout):
+    class FakeOpener:
+        def open(self, request, timeout):
             return FakeResponse()
 
-    monkeypatch.setattr(main, "_session", FakeSession())
+    monkeypatch.setattr(main, "build_opener", lambda: FakeOpener())
 
     assert main._expand_direct_stream_url("https://clck.ru/test") == "https://clck.ru/test"
 
 
-def test_expand_shortlink_with_curl_returns_safe_download(monkeypatch):
+
+def test_expand_shortlink_with_curl_returns_non_shortener(monkeypatch):
     class FakeCompletedProcess:
         returncode = 0
-        stdout = "https://site--linkfilesbot--gb24qxlnkkt9.code.run/download/1727945"
+        stdout = "https://cdn.example/final.mp3"
 
     monkeypatch.setattr(main.shutil, "which", lambda name: "curl.exe")
     monkeypatch.setattr(main.subprocess, "run", lambda *args, **kwargs: FakeCompletedProcess())
 
-    assert main._expand_shortlink_with_curl("https://clck.ru/test") == "https://site--linkfilesbot--gb24qxlnkkt9.code.run/download/1727945"
+    assert main._expand_shortlink_with_curl("https://clck.ru/test") == "https://cdn.example/final.mp3"
 
 
-def test_expand_direct_stream_url_ignores_bad_curl_target_and_uses_safe_header_fallback(monkeypatch):
-    class FakeCompletedProcess:
-        returncode = 0
-        stdout = "https://clck.ru/showcaptcha?x=1"
 
-    class FakeResponse:
-        headers = {
-            "Location": "https://sba.yandex.ru/redirect?url=https%3A%2F%2Fsite--linkfilesbot--gb24qxlnkkt9.code.run%2Fdownload%2F1727945"
-        }
+def test_expand_direct_stream_url_accepts_non_shortener_from_curl(monkeypatch):
+    monkeypatch.setattr(main, "_expand_shortlink_with_curl", lambda url: "https://ads.example/landing")
 
-        def close(self):
-            return None
+    assert main._expand_direct_stream_url("https://clck.ru/test") == "https://ads.example/landing"
 
-    class FakeSession:
-        def get(self, url, allow_redirects, stream, headers, timeout):
-            return FakeResponse()
 
-    monkeypatch.setattr(main.shutil, "which", lambda name: "curl.exe")
-    monkeypatch.setattr(main.subprocess, "run", lambda *args, **kwargs: FakeCompletedProcess())
-    monkeypatch.setattr(main, "_session", FakeSession())
 
-    assert main._expand_direct_stream_url("https://clck.ru/test") == "https://site--linkfilesbot--gb24qxlnkkt9.code.run/download/1727945"
+def test_extract_shortlink_target_yandex_redirect():
+    url = "https://sba.yandex.ru/redirect?url=https%3A%2F%2Fsite--linkfilesbot--gb24qxlnkkt9.code.run%2Fdownload%2F1727896"
+    assert main._extract_shortlink_target(url) == "https://site--linkfilesbot--gb24qxlnkkt9.code.run/download/1727896"
 
 
 def test_stream_expands_shortlink_to_final_media_url(monkeypatch):
@@ -168,7 +155,4 @@ def test_stream_expands_shortlink_to_final_media_url(monkeypatch):
     assert payload["streams"][0]["url"] == "https://site--linkfilesbot--gb24qxlnkkt9.code.run/download/1727945"
     assert payload["streams"][0]["behaviorHints"]["notWebReady"] is True
 
-def test_expand_direct_stream_url_yandex_redirect_passthrough():
-    url = "https://sba.yandex.ru/redirect?url=https%3A%2F%2Fsite--linkfilesbot--gb24qxlnkkt9.code.run%2Fdownload%2F1727896"
-    assert main._expand_direct_stream_url(url) == "https://site--linkfilesbot--gb24qxlnkkt9.code.run/download/1727896"
 

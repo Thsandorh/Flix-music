@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from requests.adapters import HTTPAdapter
 from urllib.parse import parse_qsl, quote, unquote, urlparse
+from urllib.request import Request, build_opener
 from urllib3.util.retry import Retry
 
 from app.helpers import build_recording_search_query, env_mapping, has_telegram_app_credentials
@@ -614,7 +615,12 @@ def _playback_url(id: str) -> str:
     return f"{SETTINGS.public_base_url}/api/music/media?t={token}"
 
 
-def _extract_safe_shortlink_target(url: str) -> str:
+def _should_resolve_shortened_url(url: str) -> bool:
+    host = str(urlparse(str(url or "")).netloc or "").strip().lower()
+    return host in SHORTENER_HOSTS
+
+
+def _extract_shortlink_target(url: str) -> str:
     candidate = str(url or "").strip()
     if not candidate:
         return ""
@@ -623,12 +629,8 @@ def _extract_safe_shortlink_target(url: str) -> str:
     host = str(parsed.netloc or "").strip().lower()
     if host == "sba.yandex.ru" and parsed.path.startswith("/redirect"):
         redirected = str(dict(parse_qsl(parsed.query, keep_blank_values=True)).get("url") or "").strip()
-        return _extract_safe_shortlink_target(redirected)
-
-    path = str(parsed.path or "").strip().lower()
-    if host.endswith("code.run") and path.startswith("/download/"):
-        return candidate
-    return ""
+        return _extract_shortlink_target(redirected)
+    return candidate
 
 
 def _expand_shortlink_with_curl(url: str) -> str:
@@ -655,7 +657,7 @@ def _expand_shortlink_with_curl(url: str) -> str:
     if returncode is None or int(returncode) != 0:
         return ""
 
-    return _extract_safe_shortlink_target(str(getattr(result, "stdout", "") or "").strip())
+    return str(getattr(result, "stdout", "") or "").strip()
 
 
 def _expand_direct_stream_url(url: str) -> str:
@@ -663,42 +665,36 @@ def _expand_direct_stream_url(url: str) -> str:
     if not normalized:
         return normalized
 
-    redirected = _extract_safe_shortlink_target(normalized)
-    if redirected:
-        return redirected
-
-    parsed = urlparse(normalized)
-    host = str(parsed.netloc or "").strip().lower()
-    if host not in SHORTENER_HOSTS:
+    if not _should_resolve_shortened_url(normalized):
         return normalized
 
-    curl_url = _expand_shortlink_with_curl(normalized)
+    curl_url = str(_expand_shortlink_with_curl(normalized) or "").strip()
     if curl_url:
-        return curl_url
+        curl_url = _extract_shortlink_target(curl_url)
+        if curl_url and not _should_resolve_shortened_url(curl_url):
+            return curl_url
 
-    response = None
-    try:
-        response = _session.get(
-            normalized,
-            allow_redirects=False,
-            stream=True,
-            headers={"User-Agent": SETTINGS.user_agent},
-            timeout=SETTINGS.timeout_s,
-        )
-        location = str((getattr(response, "headers", {}) or {}).get("Location") or "").strip()
-        if not location:
-            return normalized
-        redirected = _extract_safe_shortlink_target(location)
-        if redirected:
-            return redirected
-        return normalized
-    except requests.RequestException:
-        logger.debug("Shortlink expansion failed for %s", normalized)
-        return normalized
-    finally:
-        close = getattr(response, "close", None)
-        if callable(close):
-            close()
+    opener = build_opener()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+    }
+    for method in ("HEAD", "GET"):
+        try:
+            request = Request(normalized, headers=headers, method=method)
+            response = opener.open(request, timeout=SETTINGS.timeout_s)
+            try:
+                final_url = str(response.geturl() or normalized).strip()
+            finally:
+                try:
+                    response.close()
+                except Exception:
+                    pass
+            final_url = _extract_shortlink_target(final_url)
+            if final_url and not _should_resolve_shortened_url(final_url):
+                return final_url
+        except Exception:
+            continue
 
     return normalized
 
