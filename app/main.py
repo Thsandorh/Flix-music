@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from requests.adapters import HTTPAdapter
-from urllib.parse import parse_qsl, unquote, urlparse
+from urllib.parse import parse_qsl, quote, unquote, urlparse
 from urllib3.util.retry import Retry
 
 from app.helpers import build_recording_search_query, env_mapping, has_telegram_app_credentials
@@ -607,8 +607,8 @@ def _cached_or_configured_direct_url(track_ref: dict[str, str], id: str, entry: 
 
 
 def _playback_url(id: str) -> str:
-    token = _encode_play_token(id)
-    return f"{SETTINGS.public_base_url}/play/{token}/audio.mp3"
+    token = quote(_encode_play_token(id), safe="")
+    return f"{SETTINGS.public_base_url}/api/music/media?t={token}"
 
 
 def _expand_direct_stream_url(url: str) -> str:
@@ -651,6 +651,16 @@ def _expand_direct_stream_url(url: str) -> str:
             close()
 
 
+def _build_stream_item(url: str, track_ref: dict[str, str]) -> dict[str, Any]:
+    label = build_recording_search_query(track_ref.get("title", ""), track_ref.get("artist", ""), track_ref.get("year"))
+    return {
+        "name": "Direct",
+        "title": label,
+        "url": url,
+        "behaviorHints": {"notWebReady": True},
+    }
+
+
 def _resolve_direct_stream_url(id: str) -> str:
     track_ref = _decode_track_id(id)
     entry = _find_mapping_entry(track_ref, id)
@@ -678,11 +688,12 @@ def _stream_payload(type: str, id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Stream not found")
 
     track_ref = _decode_track_id(id)
-    direct_url = _cached_or_configured_direct_url(track_ref, id)
-    if not direct_url:
-        direct_url = _resolve_direct_stream_url(id)
+    return {"streams": [_build_stream_item(_playback_url(id), track_ref)]}
 
-    return {"streams": [{"title": "Direct stream", "url": direct_url}]}
+
+@app.get("/api/music/media", include_in_schema=False)
+def api_music_media(t: str) -> RedirectResponse:
+    return RedirectResponse(url=_resolve_direct_stream_url(_decode_play_token(t)), status_code=302)
 
 
 @app.get("/play/{token}/{label}", include_in_schema=False)
