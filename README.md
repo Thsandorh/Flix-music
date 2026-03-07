@@ -2,35 +2,36 @@
 
 Production-oriented Stremio addon (FastAPI) with:
 
-- **MusicBrainz** for catalog and metadata.
+- **Last.fm** for catalog discovery and metadata.
 - **MTProto bot chain** for automatic Telegram direct-link resolution.
 
 ## Core behavior
 
-When a direct URL is not already mapped for a MusicBrainz recording, the addon does **not** return browser bot links.
+When a direct URL is not already mapped for a track, the addon does **not** return browser bot links.
 
 Instead, it resolves a playable stream URL automatically using MTProto:
 
-1. Send user search phrase (or metadata-derived query) to `@vkmusic_bot`.
-2. Take the returned candidate.
-3. Send that candidate to direct-download bot (`@LinkFilesBot` by default).
-4. Extract direct playable URL from bot response.
+1. Search the track via `@vkmusic_bot`.
+2. If the bot returns callback buttons, click the first result and capture the delivered audio file.
+3. Forward the candidate to the direct-download bot (`@LinkFilesBot` by default).
+4. Extract the direct playable URL from the bot response.
 5. Return that URL in `/stream` as Stremio `url`.
 
 ## Endpoints
 
 - `GET /manifest.json`
+- `GET /configure`
 - `GET /healthz`
-- `GET /catalog/movie/musicbrainz-popular.json`
-- `GET /catalog/movie/musicbrainz-recent.json`
-- `GET /catalog/movie/musicbrainz-search.json?search=metallica`
-- `GET /meta/movie/mb:<recording-id>.json`
-- `GET /stream/movie/mb:<recording-id>.json`
+- `GET /catalog/movie/lastfm-top.json`
+- `GET /catalog/movie/lastfm-trending.json`
+- `GET /catalog/movie/lastfm-search.json?search=metallica`
+- `GET /meta/movie/lfm:<track-id>.json`
+- `GET /stream/movie/lfm:<track-id>.json`
 
 ## Required environment variables
 
 ```bash
-MUSICBRAINZ_USER_AGENT="FlixMusicStremioAddon/0.8 (your-contact@example.com)"
+LASTFM_API_KEY="your-lastfm-api-key"
 TELEGRAM_API_ID="123456"
 TELEGRAM_API_HASH="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 TELEGRAM_STRING_SESSION="<telethon_string_session>"
@@ -41,12 +42,13 @@ TELEGRAM_SESSION_PATH="~/telegram_bridge/flix_session"
 ## Optional environment variables
 
 ```bash
-MUSICBRAINZ_BASE="https://musicbrainz.org/ws/2"
-MUSICBRAINZ_SEARCH_LIMIT="20"
+LASTFM_BASE="https://ws.audioscrobbler.com/2.0/"
+LASTFM_USER_AGENT="FlixMusicStremioAddon/0.9 (your-contact@example.com)"
+LASTFM_SEARCH_LIMIT="20"
+LASTFM_CACHE_TTL_SECONDS="300"
+LASTFM_TRENDING_COUNTRY="united states"
 HTTP_TIMEOUT_SECONDS="15"
-MB_CACHE_TTL_SECONDS="120"
 LOG_LEVEL="INFO"
-SEARCH_HINT_TTL_SECONDS="1800"
 
 # bot usernames (without @ is also accepted)
 VKMUSIC_BOT_USERNAME="vkmusic_bot"
@@ -62,7 +64,7 @@ If a direct link is already known, it can be hardcoded in `HARDCODED_TELEGRAM_MA
 
 ```json
 {
-  "<musicbrainz-recording-id>": {
+  "<lastfm-track-id_or_mbid_or_artist-title>": {
     "direct_url": "https://cdn.example/song.mp3"
   }
 }
@@ -84,6 +86,16 @@ $env:TELEGRAM_LOGIN_CODE="12345"
 $env:TELEGRAM_2FA_PASSWORD="your-password"
 python scripts\generate_telegram_session.py --api-id 123456 --api-hash your_telegram_api_hash
 ```
+
+## Personal Last.fm catalogs
+
+Open `/configure`, enter a Last.fm username, and use the generated configured manifest URL. That configured addon adds user-specific catalogs for:
+
+- Loved tracks
+- Recent tracks
+- Top tracks
+
+This version does not require full Last.fm OAuth; a public Last.fm username is enough.
 
 ## Local run
 
@@ -110,6 +122,6 @@ Deploy steps:
 
 ## Notes
 
-- MTProto flow requires a valid authenticated user `TELEGRAM_STRING_SESSION`.
+- Last.fm discovery requires a valid `LASTFM_API_KEY`.
+- MTProto flow requires a valid authenticated user `TELEGRAM_STRING_SESSION` or `TELEGRAM_SESSION_PATH`.
 - Stream resolution returns playable `url` links (no `externalUrl` browser handoff).
-- For scale, replace in-memory caches with external storage.

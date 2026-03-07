@@ -5,17 +5,19 @@ from app import main
 
 
 def test_stream_rejects_telegram_direct_url(monkeypatch):
-    monkeypatch.setattr(main, "_mapping", lambda: {"abc": {"direct_url": "https://t.me/bad"}})
+    track_id = main._build_track_id(artist="Daft Punk", title="One More Time")
+    monkeypatch.setattr(main, "_find_mapping_entry", lambda _track_ref, _id: {"direct_url": "https://t.me/bad"})
 
     with pytest.raises(HTTPException) as exc:
-        main.stream("movie", "mb:abc")
+        main.stream("movie", track_id)
 
     assert exc.value.status_code == 502
     assert "Telegram" in str(exc.value.detail)
 
 
 def test_stream_returns_non_telegram_direct_url(monkeypatch):
-    monkeypatch.setattr(main, "_mapping", lambda: {"abc": {"direct_url": "https://cdn.example/a.mp3"}})
+    track_id = main._build_track_id(artist="Daft Punk", title="One More Time")
+    monkeypatch.setattr(main, "_find_mapping_entry", lambda _track_ref, _id: {"direct_url": "https://cdn.example/a.mp3"})
 
-    payload = main.stream("movie", "mb:abc")
+    payload = main.stream("movie", track_id)
     assert payload["streams"][0]["url"] == "https://cdn.example/a.mp3"

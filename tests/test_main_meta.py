@@ -2,33 +2,35 @@ from app import main
 
 
 def test_build_meta_item_enriched_fields():
-    rec = {
-        "id": "abc",
-        "title": "One More Time",
-        "length": 320000,
-        "artist-credit": [{"name": "Daft Punk"}],
-        "releases": [{"id": "rel1", "date": "2000-11-30"}],
-        "tags": [{"name": "house"}, {"name": "electronic"}],
+    track = {
+        "name": "One More Time",
+        "duration": "320000",
+        "mbid": "abc-mbid",
+        "artist": {"name": "Daft Punk"},
+        "album": {"title": "Discovery", "published": "30 Nov 2000, 00:00"},
+        "toptags": {"tag": [{"name": "house"}, {"name": "electronic"}]},
+        "image": [{"size": "large", "#text": "https://img.example/cover.jpg"}],
+        "listeners": "12345",
     }
 
-    meta = main._build_meta_item(id_value="mb:abc", rec=rec)
+    meta = main._build_meta_item(track)
 
     assert meta["name"] == "One More Time"
-    assert meta["poster"].endswith("/release/rel1/front-250")
-    assert meta["releaseInfo"] == "2000-11-30"
+    assert meta["poster"] == "https://img.example/cover.jpg"
+    assert meta["releaseInfo"] == "2000"
     assert meta["genres"] == ["house", "electronic"]
     assert meta["cast"] == ["Daft Punk"]
 
 
-def test_meta_fallback_when_musicbrainz_fails(monkeypatch):
-    def boom(path, params):
+def test_meta_fallback_when_lastfm_fails(monkeypatch):
+    track_id = main._build_track_id(artist="Daft Punk", title="One More Time", year="2000")
+
+    def boom(_track_ref):
         raise main.requests.RequestException("upstream down")
 
-    monkeypatch.setattr(main, "_mb_get", boom)
-    main._SEARCH_HINTS["abc"] = (10**12, "Daft Punk - One More Time")
-
-    payload = main.meta("movie", "mb:abc")
+    monkeypatch.setattr(main, "_track_info", boom)
+    payload = main.meta("movie", track_id)
     meta = payload["meta"]
 
-    assert meta["name"] == "Daft Punk - One More Time"
+    assert meta["name"] == "Daft Punk - One More Time 2000"
     assert "temporarily unavailable" in meta["description"]
