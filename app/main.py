@@ -819,6 +819,10 @@ def configure() -> str:
     .pill { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 999px; background: rgba(94, 231, 183, 0.12); color: #d1fae5; font-size: 0.88rem; }
     @media (max-width: 860px) { .hero-grid { grid-template-columns: 1fr; } .shell { padding-top: 24px; } }
   </style>
+  <script>
+    window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+  </script>
+  <script defer src="/_vercel/insights/script.js"></script>
 </head>
 <body>
   <div class="shell">
