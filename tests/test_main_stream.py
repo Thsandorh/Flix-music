@@ -32,7 +32,8 @@ def test_stream_returns_lazy_play_url(monkeypatch):
 
     payload = main.stream("movie", track_id)
 
-    assert payload["streams"][0]["url"] == f"{main.SETTINGS.public_base_url}/play/{track_id}"
+    assert payload["streams"][0]["url"] == main._playback_url(track_id)
+    assert payload["streams"][0]["url"].endswith('/audio.mp3')
 
 
 def test_play_resolves_via_mtproto(monkeypatch):
@@ -45,9 +46,9 @@ def test_play_resolves_via_mtproto(monkeypatch):
     monkeypatch.setattr(main, "resolve_direct_url_from_bots", fake_resolver)
     monkeypatch.setattr(main, "_DIRECT_URL_CACHE", {})
 
-    response = main.play(track_id)
+    response = main.play(main._encode_play_token(track_id), 'audio.mp3')
 
-    assert response.status_code == 307
+    assert response.status_code == 302
     assert response.headers["location"] == "https://cdn.example/resolved.mp3"
 
 

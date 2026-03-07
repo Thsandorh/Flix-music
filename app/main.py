@@ -272,6 +272,21 @@ def _decode_track_id(value: str) -> dict[str, str]:
     return {k: str(v) for k, v in payload.items() if v is not None}
 
 
+def _encode_play_token(id: str) -> str:
+    return base64.urlsafe_b64encode(str(id).encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _decode_play_token(token: str) -> str:
+    padding = "=" * (-len(token) % 4)
+    try:
+        value = base64.urlsafe_b64decode((token + padding).encode("ascii")).decode("utf-8")
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Invalid playback token") from exc
+    if not value.startswith("lfm:"):
+        raise HTTPException(status_code=404, detail="Invalid playback token")
+    return value
+
+
 def _encode_config(lastfm_user: str | None = None) -> str:
     payload: dict[str, str] = {}
     if lastfm_user and lastfm_user.strip():
@@ -592,7 +607,8 @@ def _cached_or_configured_direct_url(track_ref: dict[str, str], id: str, entry: 
 
 
 def _playback_url(id: str) -> str:
-    return f"{SETTINGS.public_base_url}/play/{id}"
+    token = _encode_play_token(id)
+    return f"{SETTINGS.public_base_url}/play/{token}/audio.mp3"
 
 
 def _resolve_direct_stream_url(id: str) -> str:
@@ -635,9 +651,15 @@ def _stream_payload(type: str, id: str) -> dict[str, Any]:
     }
 
 
+@app.get("/play/{token}/{label}", include_in_schema=False)
+def play(token: str, label: str) -> RedirectResponse:
+    _ = label
+    return RedirectResponse(url=_resolve_direct_stream_url(_decode_play_token(token)), status_code=302)
+
+
 @app.get("/play/{id}", include_in_schema=False)
-def play(id: str) -> RedirectResponse:
-    return RedirectResponse(url=_resolve_direct_stream_url(id), status_code=307)
+def play_legacy(id: str) -> RedirectResponse:
+    return RedirectResponse(url=_resolve_direct_stream_url(id), status_code=302)
 
 
 @app.get("/")
