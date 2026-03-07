@@ -64,6 +64,7 @@ HARDCODED_TELEGRAM_MAPPING: dict[str, dict[str, str]] = {
 # search context cache: recording_mbid -> user-entered search phrase
 _SEARCH_HINTS: dict[str, tuple[float, str]] = {}
 _SEARCH_HINT_TTL_SECONDS = int(os.getenv("SEARCH_HINT_TTL_SECONDS", "1800"))
+_RECORDING_INC = "artist-credits+releases"
 
 
 def _cache_key(path: str, params: dict[str, Any]) -> str:
@@ -116,7 +117,7 @@ def _mapping() -> dict[str, dict[str, str]]:
 
 
 def _recording_search_query(mbid: str) -> str:
-    rec = _mb_get(f"recording/{mbid}", {"inc": "artists+releases"})
+    rec = _mb_get(f"recording/{mbid}", {"inc": _RECORDING_INC})
     title = rec.get("title", "")
     artist = safe_artist_string(rec.get("artist-credit"))
 
@@ -255,7 +256,7 @@ def meta(type: str, id: str) -> dict[str, Any]:
 
     mbid = id[3:]
     try:
-        rec = _mb_get(f"recording/{mbid}", {"inc": "artists+releases"})
+        rec = _mb_get(f"recording/{mbid}", {"inc": _RECORDING_INC})
     except requests.RequestException as exc:
         logger.exception("MusicBrainz meta query failed")
         raise HTTPException(status_code=502, detail=f"MusicBrainz request failed: {exc}") from exc
