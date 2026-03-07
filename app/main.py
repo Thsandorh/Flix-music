@@ -17,7 +17,7 @@ from app.helpers import (
     has_telegram_app_credentials,
     safe_artist_string,
 )
-from app.mtproto import resolve_direct_url_from_bots
+from app.mtproto import _is_telegram_url, resolve_direct_url_from_bots
 
 logger = logging.getLogger("flix_music")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -335,7 +335,10 @@ def stream(type: str, id: str) -> dict[str, Any]:
     entry = _mapping().get(mbid)
 
     if entry and "direct_url" in entry:
-        return {"streams": [{"title": "Direct URL", "url": entry["direct_url"]}]}
+        configured_url = str(entry["direct_url"]).strip()
+        if _is_telegram_url(configured_url):
+            raise HTTPException(status_code=502, detail="Configured direct_url points to Telegram; expected playable media URL")
+        return {"streams": [{"title": "Direct URL", "url": configured_url}]}
 
     if entry and "message_url" in entry:
         query = entry["message_url"]

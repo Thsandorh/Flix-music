@@ -7,6 +7,11 @@ from typing import Any
 URL_RE = re.compile(r"https?://\S+")
 
 
+def _is_telegram_url(url: str) -> bool:
+    normalized = url.lower()
+    return "t.me/" in normalized or "telegram.me/" in normalized
+
+
 def _extract_urls_from_text(text: str | None) -> list[str]:
     if not text:
         return []
@@ -38,7 +43,7 @@ def _first_url_from_messages(messages: Iterable[Any]) -> str | None:
 def _first_non_telegram_url(messages: Iterable[Any]) -> str | None:
     for message in messages:
         for url in _extract_urls_from_message(message):
-            if "t.me/" not in url and "telegram.me/" not in url:
+            if not _is_telegram_url(url):
                 return url
     return None
 
@@ -92,10 +97,10 @@ async def resolve_direct_url_from_bots(query: str) -> str:
             limit=20,
             wait_seconds=wait_seconds,
         )
-        direct_url = _first_non_telegram_url(direct_messages) or _first_url_from_messages(direct_messages)
+        direct_url = _first_non_telegram_url(direct_messages)
 
         if not direct_url:
-            raise RuntimeError("No direct URL found in direct-download bot response")
+            raise RuntimeError("Direct bot did not return a playable non-Telegram URL")
 
         return direct_url
     finally:

@@ -5,6 +5,7 @@ from app.mtproto import (
     _extract_urls_from_text,
     _first_non_telegram_url,
     _first_url_from_messages,
+    _is_telegram_url,
 )
 
 
@@ -34,3 +35,9 @@ def test_first_url_from_messages_keeps_message_order():
 def test_first_non_telegram_url_prefers_playable_link():
     messages = [_msg("https://t.me/abc"), _msg("https://cdn.example/song.mp3")]
     assert _first_non_telegram_url(messages) == "https://cdn.example/song.mp3"
+
+
+def test_is_telegram_url():
+    assert _is_telegram_url("https://t.me/abc") is True
+    assert _is_telegram_url("https://telegram.me/abc") is True
+    assert _is_telegram_url("https://cdn.example/song.mp3") is False
