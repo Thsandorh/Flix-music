@@ -238,7 +238,7 @@ def healthz() -> dict[str, Any]:
         "mapping_entries": len(_mapping()),
         "cache_entries": len(_MB_CACHE),
         "search_hints": len(_SEARCH_HINTS),
-        "mtproto_ready": bool(os.getenv("TELEGRAM_STRING_SESSION")),
+        "mtproto_ready": bool(os.getenv("TELEGRAM_STRING_SESSION")) or bool(os.getenv("TELEGRAM_SESSION_PATH")),
     }
 
 
