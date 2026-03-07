@@ -128,9 +128,29 @@ def test_expand_shortlink_with_curl_returns_non_shortener(monkeypatch):
 
 
 def test_expand_direct_stream_url_accepts_non_shortener_from_curl(monkeypatch):
-    monkeypatch.setattr(main, "_expand_shortlink_with_curl", lambda url: "https://ads.example/landing")
+    monkeypatch.setattr(main, "_expand_shortlink_with_curl", lambda url: "https://cdn.example/final.mp3")
 
-    assert main._expand_direct_stream_url("https://clck.ru/test") == "https://ads.example/landing"
+    assert main._expand_direct_stream_url("https://clck.ru/test") == "https://cdn.example/final.mp3"
+
+
+
+def test_expand_direct_stream_url_rejects_blocked_curl_target_and_uses_fallback(monkeypatch):
+    monkeypatch.setattr(main, "_expand_shortlink_with_curl", lambda url: "https://share.flocktory.com/exchange/login?ssid=7010&bid=16326")
+
+    class FakeResponse:
+        def geturl(self):
+            return "https://cdn.example/final.mp3"
+
+        def close(self):
+            return None
+
+    class FakeOpener:
+        def open(self, request, timeout):
+            return FakeResponse()
+
+    monkeypatch.setattr(main, "build_opener", lambda: FakeOpener())
+
+    assert main._expand_direct_stream_url("https://clck.ru/test") == "https://cdn.example/final.mp3"
 
 
 

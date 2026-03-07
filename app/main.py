@@ -77,6 +77,16 @@ HARDCODED_TELEGRAM_MAPPING: dict[str, dict[str, str]] = {}
 LOGO_PATH = Path(__file__).resolve().parent / "assets" / "flix-music.png"
 LASTFM_PLACEHOLDER_MARKERS = ("2a96cbd8b46e442fc41c2b86b821562f",)
 SHORTENER_HOSTS = {"clck.ru", "www.clck.ru"}
+BLOCKED_SHORTLINK_TARGET_HOSTS = {
+    "share.flocktory.com",
+}
+BLOCKED_SHORTLINK_TARGET_HOST_FRAGMENTS = (
+    "flocktory.com",
+)
+BLOCKED_SHORTLINK_TARGET_PATH_FRAGMENTS = (
+    "/showcaptcha",
+    "/exchange/login",
+)
 
 
 def _cache_key(params: dict[str, Any]) -> str:
@@ -633,6 +643,23 @@ def _extract_shortlink_target(url: str) -> str:
     return candidate
 
 
+def _is_blocked_shortlink_target(url: str) -> bool:
+    candidate = str(url or "").strip()
+    if not candidate:
+        return True
+
+    parsed = urlparse(candidate)
+    host = str(parsed.netloc or "").strip().lower()
+    path = str(parsed.path or "").strip().lower()
+    if host in BLOCKED_SHORTLINK_TARGET_HOSTS:
+        return True
+    if any(fragment in host for fragment in BLOCKED_SHORTLINK_TARGET_HOST_FRAGMENTS):
+        return True
+    if any(fragment in path for fragment in BLOCKED_SHORTLINK_TARGET_PATH_FRAGMENTS):
+        return True
+    return False
+
+
 def _expand_shortlink_with_curl(url: str) -> str:
     candidate = str(url or "").strip()
     if not candidate:
@@ -671,7 +698,7 @@ def _expand_direct_stream_url(url: str) -> str:
     curl_url = str(_expand_shortlink_with_curl(normalized) or "").strip()
     if curl_url:
         curl_url = _extract_shortlink_target(curl_url)
-        if curl_url and not _should_resolve_shortened_url(curl_url):
+        if curl_url and not _should_resolve_shortened_url(curl_url) and not _is_blocked_shortlink_target(curl_url):
             return curl_url
 
     opener = build_opener()
@@ -691,7 +718,7 @@ def _expand_direct_stream_url(url: str) -> str:
                 except Exception:
                     pass
             final_url = _extract_shortlink_target(final_url)
-            if final_url and not _should_resolve_shortened_url(final_url):
+            if final_url and not _should_resolve_shortened_url(final_url) and not _is_blocked_shortlink_target(final_url):
                 return final_url
         except Exception:
             continue
