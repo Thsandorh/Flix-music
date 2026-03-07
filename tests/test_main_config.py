@@ -60,3 +60,32 @@ def test_configure_page_contains_working_markup():
     assert 'https://flixnest.app/flix-streams/configure' in html
     assert 'https://flixnest.app/flix-catalogs/configure' in html
     assert 'https://github.com/Thsandorh/nCore-addon' in html
+
+
+def test_catalog_extra_path_uses_search(monkeypatch):
+    calls = []
+
+    def fake_search(query):
+        calls.append(query)
+        return [{'name': 'Not Like Us', 'artist': {'name': 'Kendrick Lamar'}}]
+
+    monkeypatch.setattr(main, '_search_tracks', fake_search)
+    payload = main.catalog_with_extra('movie', 'lastfm-top', 'search=kendrick')
+
+    assert calls == ['kendrick']
+    assert payload['metas'][0]['name'] == 'Not Like Us'
+
+
+def test_configured_catalog_extra_path_uses_search(monkeypatch):
+    calls = []
+
+    def fake_search(query):
+        calls.append(query)
+        return [{'name': 'HUMBLE.', 'artist': {'name': 'Kendrick Lamar'}}]
+
+    monkeypatch.setattr(main, '_search_tracks', fake_search)
+    token = main._encode_config('sandor555')
+    payload = main.configured_catalog_with_extra(token, 'movie', 'lastfm-top', 'search=kendrick')
+
+    assert calls == ['kendrick']
+    assert payload['metas'][0]['name'] == 'HUMBLE.'

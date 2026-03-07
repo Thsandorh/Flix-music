@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from requests.adapters import HTTPAdapter
+from urllib.parse import parse_qsl, unquote
 from urllib3.util.retry import Retry
 
 from app.helpers import build_recording_search_query, env_mapping, has_telegram_app_credentials
@@ -294,6 +295,14 @@ def _decode_config(token: str | None) -> dict[str, str]:
 
 def _configured_manifest_url(token: str) -> str:
     return f"/c/{token}/manifest.json"
+
+
+def _catalog_extra_params(extra: str | None) -> dict[str, str]:
+    raw = str(extra or '').strip().lstrip('/')
+    if not raw:
+        return {}
+    parsed = dict(parse_qsl(unquote(raw), keep_blank_values=True))
+    return {str(k): str(v) for k, v in parsed.items() if v is not None}
 
 
 def _build_meta_item(track: dict[str, Any], *, id_value: str | None = None) -> dict[str, Any]:
@@ -931,10 +940,23 @@ def catalog(type: str, catalog_id: str, search: str | None = None, lastfm_user: 
     return _catalog_payload(type, catalog_id, search=search, lastfm_user=lastfm_user.strip() if lastfm_user else None)
 
 
+@app.get("/catalog/{type}/{catalog_id}/{extra}.json")
+def catalog_with_extra(type: str, catalog_id: str, extra: str, lastfm_user: str | None = None) -> dict[str, Any]:
+    params = _catalog_extra_params(extra)
+    return _catalog_payload(type, catalog_id, search=params.get("search"), lastfm_user=lastfm_user.strip() if lastfm_user else None)
+
+
 @app.get("/c/{config}/catalog/{type}/{catalog_id}.json")
 def configured_catalog(config: str, type: str, catalog_id: str, search: str | None = None) -> dict[str, Any]:
     cfg = _decode_config(config)
     return _catalog_payload(type, catalog_id, search=search, lastfm_user=cfg.get("lastfm_user"))
+
+
+@app.get("/c/{config}/catalog/{type}/{catalog_id}/{extra}.json")
+def configured_catalog_with_extra(config: str, type: str, catalog_id: str, extra: str) -> dict[str, Any]:
+    cfg = _decode_config(config)
+    params = _catalog_extra_params(extra)
+    return _catalog_payload(type, catalog_id, search=params.get("search"), lastfm_user=cfg.get("lastfm_user"))
 
 
 @app.get("/meta/{type}/{id}.json")
