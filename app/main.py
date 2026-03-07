@@ -8,6 +8,7 @@ from typing import Any
 
 import requests
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -39,6 +40,13 @@ if "contact@" in SETTINGS.user_agent or "example" in SETTINGS.user_agent:
     logger.warning("MUSICBRAINZ_USER_AGENT should be customized for production deployments.")
 
 app = FastAPI(title="Stremio MusicBrainz + Telegram Addon")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 _session = requests.Session()
 _retry = Retry(
