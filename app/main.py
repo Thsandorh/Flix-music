@@ -99,6 +99,73 @@ def _poster_from_release(release_id: str | None) -> str | None:
     return f"https://coverartarchive.org/release/{release_id}/front-250"
 
 
+def _release_info_from_release(release: dict[str, Any] | None) -> str:
+    if not isinstance(release, dict):
+        return ""
+    return str(release.get("date", "")).strip()
+
+
+def _runtime_from_length_ms(length_ms: Any) -> str:
+    if not isinstance(length_ms, int) or length_ms <= 0:
+        return ""
+    total_seconds = length_ms // 1000
+    minutes = total_seconds // 60
+    seconds = total_seconds % 60
+    return f"{minutes}m {seconds:02d}s"
+
+
+def _genres_from_tags(tags: Any) -> list[str]:
+    if not isinstance(tags, list):
+        return []
+    names: list[str] = []
+    for tag in tags:
+        if isinstance(tag, dict) and tag.get("name"):
+            names.append(str(tag["name"]))
+    return names[:5]
+
+
+def _build_meta_item(id_value: str, rec: dict[str, Any]) -> dict[str, Any]:
+    releases = rec.get("releases", [])
+    first_release = releases[0] if releases and isinstance(releases[0], dict) else None
+    first_release_id = first_release.get("id") if first_release else None
+    poster = _poster_from_release(first_release_id)
+    artist = safe_artist_string(rec.get("artist-credit"))
+    release_info = _release_info_from_release(first_release)
+
+    description_parts = []
+    if artist:
+        description_parts.append(f"Artist: {artist}")
+    if release_info:
+        description_parts.append(f"Release: {release_info}")
+
+    item: dict[str, Any] = {
+        "id": id_value,
+        "type": "movie",
+        "name": rec.get("title", "Unknown"),
+        "description": "\n".join(description_parts),
+    }
+
+    if poster:
+        item["poster"] = poster
+        item["background"] = poster
+
+    if artist:
+        item["cast"] = [artist]
+
+    runtime = _runtime_from_length_ms(rec.get("length"))
+    if runtime:
+        item["runtime"] = runtime
+
+    genres = _genres_from_tags(rec.get("tags"))
+    if genres:
+        item["genres"] = genres
+
+    if release_info:
+        item["releaseInfo"] = release_info
+
+    return item
+
+
 def _mapping() -> dict[str, dict[str, str]]:
     """Return effective mapping from hardcoded defaults + optional env override."""
     mapping = dict(HARDCODED_TELEGRAM_MAPPING)
@@ -231,20 +298,7 @@ def catalog(type: str, catalog_id: str, search: str | None = None) -> dict[str, 
     recordings = data.get("recordings", [])
     _remember_search_hints(search=search, recordings=recordings)
 
-    metas = []
-    for rec in recordings:
-        rels = rec.get("releases", [])
-        first_release = rels[0]["id"] if rels else None
-        artist = safe_artist_string(rec.get("artist-credit"))
-        metas.append(
-            {
-                "id": f"mb:{rec['id']}",
-                "type": "movie",
-                "name": rec.get("title", "Unknown"),
-                "poster": _poster_from_release(first_release),
-                "description": f"Artist: {artist}" if artist else "",
-            }
-        )
+    metas = [_build_meta_item(id_value=f"mb:{rec['id']}", rec=rec) for rec in recordings]
 
     return {"metas": metas}
 
@@ -257,23 +311,19 @@ def meta(type: str, id: str) -> dict[str, Any]:
     mbid = id[3:]
     try:
         rec = _mb_get(f"recording/{mbid}", {"inc": _RECORDING_INC})
-    except requests.RequestException as exc:
+    except requests.RequestException:
         logger.exception("MusicBrainz meta query failed")
-        raise HTTPException(status_code=502, detail=f"MusicBrainz request failed: {exc}") from exc
-
-    rels = rec.get("releases", [])
-    first_release = rels[0]["id"] if rels else None
-    artist = safe_artist_string(rec.get("artist-credit"))
-
-    return {
-        "meta": {
-            "id": id,
-            "type": "movie",
-            "name": rec.get("title", "Unknown"),
-            "poster": _poster_from_release(first_release),
-            "description": f"Artist: {artist}" if artist else "",
+        fallback_title = _search_hint_for_mbid(mbid) or f"MusicBrainz recording {mbid}"
+        return {
+            "meta": {
+                "id": id,
+                "type": "movie",
+                "name": fallback_title,
+                "description": "Metadata temporarily unavailable from MusicBrainz.",
+            }
         }
-    }
+
+    return {"meta": _build_meta_item(id_value=id, rec=rec)}
 
 
 @app.get("/stream/{type}/{id}.json")
