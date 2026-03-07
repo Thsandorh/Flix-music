@@ -1,4 +1,4 @@
-# Flix-music
+# Flix-Music
 
 Production-oriented Stremio addon (FastAPI) with:
 

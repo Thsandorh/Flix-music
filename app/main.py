@@ -6,12 +6,13 @@ import os
 import time
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
+from pathlib import Path
 from typing import Any
 
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -31,6 +32,7 @@ class Settings:
     timeout_s: int = int(os.getenv("HTTP_TIMEOUT_SECONDS", "15"))
     cache_ttl_s: int = int(os.getenv("LASTFM_CACHE_TTL_SECONDS", "300"))
     trending_country: str = os.getenv("LASTFM_TRENDING_COUNTRY", "united states")
+    public_base_url: str = os.getenv("PUBLIC_BASE_URL", "https://flix-music.vercel.app").strip().rstrip("/")
 
 
 SETTINGS = Settings()
@@ -38,7 +40,7 @@ SETTINGS = Settings()
 if "contact@" in SETTINGS.user_agent or "example" in SETTINGS.user_agent:
     logger.warning("LASTFM_USER_AGENT should be customized for production deployments.")
 
-app = FastAPI(title="Stremio Last.fm + Telegram Addon")
+app = FastAPI(title="Flix-Music")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -61,6 +63,7 @@ _session.mount("http://", HTTPAdapter(max_retries=_retry))
 
 _LASTFM_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 HARDCODED_TELEGRAM_MAPPING: dict[str, dict[str, str]] = {}
+LOGO_PATH = Path(__file__).resolve().parent / "assets" / "flix-music.png"
 
 
 def _cache_key(params: dict[str, Any]) -> str:
@@ -364,8 +367,9 @@ def _manifest_payload(lastfm_user: str | None = None) -> dict[str, Any]:
     return {
         "id": "community.lastfm.telegram",
         "version": "1.0.0",
-        "name": "Last.fm + Telegram",
-        "description": "Last.fm discovery catalog with Telegram playback links.",
+        "name": "Flix-Music",
+        "description": "Flix-Music: Last.fm discovery catalog with Telegram playback links.",
+        "logo": f"{SETTINGS.public_base_url}/logo.png",
         "resources": ["catalog", "meta", "stream"],
         "types": ["movie"],
         "catalogs": catalogs,
@@ -489,7 +493,7 @@ def configure() -> str:
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Flix-music Configure</title>
+  <title>Flix-Music Configure</title>
   <style>
     body { font-family: Segoe UI, sans-serif; max-width: 920px; margin: 40px auto; padding: 0 20px 40px; background: #0f172a; color: #e5e7eb; }
     .card { background: #111827; border: 1px solid #374151; border-radius: 16px; padding: 24px; }
@@ -512,7 +516,7 @@ def configure() -> str:
 <body>
   <div class="stack">
     <div class="card">
-      <h1>Flix-music configuration</h1>
+      <h1>Flix-Music configuration</h1>
       <p class="muted">Enter a Last.fm username to enable personal Loved, Recent and Top Tracks catalogs.</p>
       <label for="lastfmUser">Last.fm username</label>
       <input id="lastfmUser" placeholder="your-lastfm-username" />
@@ -596,6 +600,11 @@ def configure() -> str:
   </script>
 </body>
 </html>"""
+
+
+@app.get("/logo.png", include_in_schema=False)
+def logo() -> FileResponse:
+    return FileResponse(LOGO_PATH, media_type="image/png", headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 @app.get("/manifest.json")

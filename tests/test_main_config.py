@@ -4,6 +4,8 @@ from app import main
 def test_manifest_without_user_has_public_catalogs_only():
     payload = main.manifest()
     catalog_ids = [item['id'] for item in payload['catalogs']]
+    assert payload['name'] == 'Flix-Music'
+    assert payload['logo'].endswith('/logo.png')
     assert catalog_ids == ['lastfm-top', 'lastfm-trending', 'lastfm-search']
 
 
