@@ -1,55 +1,100 @@
-# Flix-music (Stremio + MusicBrainz + Telegram)
+# Flix-music
 
-Igen, megvalósítható a flow amit írtál:
+A proof-of-concept Stremio addon that combines:
 
-- keresés/meta: **MusicBrainz API**
-- zene forrás: Telegram (pl. `@vkmusic_bot`)
-- direkt fájl link: `@LinkFilesBot` (vagy `file_id` alapú feloldás saját bot tokennel)
-- lejátszás Stremióban: `/stream/...` endpoint `url` mezőn keresztül
+- **MusicBrainz** for searchable music catalog and metadata.
+- **Telegram** for stream delivery (via Bot API `file_id` resolution or pre-generated direct URLs).
+- **LinkFilesBot fallback** when a direct stream URL is not yet mapped.
 
-## Mit tud ez a verzió?
+## Overview
 
-- `catalog` + `meta`: MusicBrainz recording adatok (név, artist, borító)
-- `stream`: 2 mód
-  1. **direct_url** alapján (ha már van kész link pl. LinkFilesBot-ból)
-  2. **file_id** alapján (`getFile` Telegram Bot API -> direkt fájl URL)
-- fallbackként (ha még nincs mapping): `externalUrl`-t ad `@LinkFilesBot` deep linkre
+This service exposes standard Stremio addon endpoints:
 
-## Környezeti változók
+- `manifest`
+- `catalog`
+- `meta`
+- `stream`
+- `healthz`
 
-```bash
-export TELEGRAM_BOT_TOKEN="123456:ABCDEF"
-export MUSICBRAINZ_USER_AGENT="FlixMusicAddon/0.2 (you@example.com)"
+The catalog and metadata are sourced from the MusicBrainz Web Service. Stream URLs are resolved from a mapping keyed by MusicBrainz recording ID.
 
-# Formátum 1: egyszerű string (file_id)
-# {"<recording_id>": "<file_id>"}
+## Features
 
-# Formátum 2: egyszerű string (direct_url)
-# {"<recording_id>": "https://.../song.mp3"}
+- Search recordings from MusicBrainz.
+- Return recording metadata (title, artist, cover art URL).
+- Resolve playable stream URLs using either:
+  - Telegram Bot API `getFile` (`file_id` -> direct file URL), or
+  - a pre-resolved `direct_url`.
+- Return a LinkFilesBot deep-link as fallback when no mapping exists.
 
-# Formátum 3: objektum
-# {"<recording_id>": {"file_id": "...", "direct_url": "..."}}
+## Requirements
 
-export TELEGRAM_FILE_MAPPING='{
-  "f4d5f6bb-4f95-4a20-9f0a-99f9e1f5f111": {
-    "direct_url": "https://example-cdn.local/song.mp3"
-  }
-}'
+- Python 3.10+
+- `fastapi`
+- `uvicorn`
+- `requests`
+- `pytest` (for tests)
 
-# opcionális
-export LINKFILESBOT_URL_TEMPLATE="https://t.me/LinkFilesBot?start={recording_id}"
-```
+Dependencies are listed in `requirements.txt`.
 
-## Telepítés / futtatás
+## Installation
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+## Configuration
+
+Set the following environment variables before starting the service.
+
+### Required for Telegram `file_id` resolution
+
+```bash
+export TELEGRAM_BOT_TOKEN="123456:ABCDEF"
+```
+
+### Recommended for MusicBrainz API usage
+
+```bash
+export MUSICBRAINZ_USER_AGENT="FlixMusicAddon/0.2 (contact@example.com)"
+```
+
+### Mapping of MusicBrainz recording IDs to Telegram sources
+
+```bash
+export TELEGRAM_FILE_MAPPING='{
+  "<recording_mbid>": "<file_id_or_direct_url>",
+  "<recording_mbid_2>": {
+    "file_id": "<telegram_file_id>",
+    "direct_url": "https://cdn.example/song.mp3"
+  }
+}'
+```
+
+Supported value formats per recording ID:
+
+1. String `file_id`
+   - `{"<mbid>": "AgACAg..."}`
+2. String `direct_url`
+   - `{"<mbid>": "https://.../song.mp3"}`
+3. Object with one or both fields
+   - `{"<mbid>": {"file_id": "...", "direct_url": "..."}}`
+
+### Optional LinkFilesBot URL template
+
+```bash
+export LINKFILESBOT_URL_TEMPLATE="https://t.me/LinkFilesBot?start={recording_id}"
+```
+
+## Running the service
+
+```bash
 uvicorn app.main:app --host 0.0.0.0 --port 7000
 ```
 
-## Endpointok
+## Endpoints
 
 - `GET /manifest.json`
 - `GET /healthz`
@@ -57,11 +102,25 @@ uvicorn app.main:app --host 0.0.0.0 --port 7000
 - `GET /meta/movie/mb:<recording-id>.json`
 - `GET /stream/movie/mb:<recording-id>.json`
 
-## Gyakorlati workflow (a botjaiddal)
+## Stream Resolution Logic
 
-1. zenét keresel `@vkmusic_bot`-ban
-2. a fájlt továbbítod/kezeled `@LinkFilesBot`-tal, ahonnan kapsz közvetlen linket
-3. a recording MBID-hez beírod `direct_url`-ként a `TELEGRAM_FILE_MAPPING`-be
-4. Stremio a `/stream` endpointból lejátsza a kapott linket
+For `GET /stream/movie/mb:<recording-id>.json`:
 
-> Megjegyzés: a botok működése, rate limit, fájl-hozzáférés és jogi/licenc kérdések a te Telegram setupodtól függenek.
+1. Look up `<recording-id>` in `TELEGRAM_FILE_MAPPING`.
+2. If `direct_url` is present, return it as Stremio stream `url`.
+3. Else, if `file_id` is present, call Telegram Bot API `getFile` and return the resolved direct URL.
+4. If no mapping exists, return a fallback stream entry using `externalUrl` (LinkFilesBot deep-link).
+
+## Practical Bot Workflow (Example)
+
+1. Locate or prepare the track in Telegram (e.g., via `@vkmusic_bot`).
+2. Obtain a direct link or reusable identifier (e.g., via `@LinkFilesBot` or bot-side file handling).
+3. Store the result in `TELEGRAM_FILE_MAPPING` under the corresponding MusicBrainz recording ID.
+4. Consume `/stream/...` from Stremio.
+
+## Notes and Limitations
+
+- This project is a PoC and does not include persistent storage.
+- Source mapping is environment-variable based.
+- Telegram access, rate limits, and file availability depend on bot/account setup.
+- Legal/licensing compliance for streamed content is the operator’s responsibility.
