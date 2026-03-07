@@ -1,126 +1,141 @@
 # Flix-music
 
-A proof-of-concept Stremio addon that combines:
+Production-oriented Stremio addon (FastAPI) that uses:
 
-- **MusicBrainz** for searchable music catalog and metadata.
-- **Telegram** for stream delivery (via Bot API `file_id` resolution or pre-generated direct URLs).
-- **LinkFilesBot fallback** when a direct stream URL is not yet mapped.
+- **MusicBrainz** as catalog/metadata provider (equivalent role to TMDB in movie addons).
+- **Telegram** as playback target provider (direct links, message links, and metadata-based search fallback).
 
-## Overview
+## How this maps to Stremio architecture
 
-This service exposes standard Stremio addon endpoints:
+For Stremio, three endpoints define the full experience:
 
-- `manifest`
-- `catalog`
-- `meta`
-- `stream`
-- `healthz`
+1. `catalog` → what users browse/search in the UI.
+2. `meta` → details for a selected catalog item.
+3. `stream` → playable target(s) for that item.
 
-The catalog and metadata are sourced from the MusicBrainz Web Service. Stream URLs are resolved from a mapping keyed by MusicBrainz recording ID.
+In this addon:
 
-## Features
+- `catalog` and `meta` are assembled from **MusicBrainz recording data**.
+- `catalog` has three lanes:
+  - `musicbrainz-popular` → query: `tag:pop OR tag:rock`
+  - `musicbrainz-recent` → query: `date:[2023 TO *]`
+  - `musicbrainz-search` → query from `search` extra (or fallback `tag:music`)
+- `stream` uses Telegram links from mapping, and if absent, builds a **Telegram search query by name (+ year)**.
 
-- Search recordings from MusicBrainz.
-- Return recording metadata (title, artist, cover art URL).
-- Resolve playable stream URLs using either:
-  - Telegram Bot API `getFile` (`file_id` -> direct file URL), or
-  - a pre-resolved `direct_url`.
-- Return a LinkFilesBot deep-link as fallback when no mapping exists.
+## Key behavior requested
 
-## Requirements
+No bot token is required.
 
-- Python 3.10+
-- `fastapi`
-- `uvicorn`
-- `requests`
-- `pytest` (for tests)
+When a recording has no direct mapping, stream fallback is generated from MusicBrainz metadata using:
 
-Dependencies are listed in `requirements.txt`.
+- Artist name
+- Track title
+- Release year (if available)
 
-## Installation
+Example generated search query:
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-## Configuration
-
-Set the following environment variables before starting the service.
-
-### Required for Telegram `file_id` resolution
-
-```bash
-export TELEGRAM_BOT_TOKEN="123456:ABCDEF"
-```
-
-### Recommended for MusicBrainz API usage
-
-```bash
-export MUSICBRAINZ_USER_AGENT="FlixMusicAddon/0.2 (contact@example.com)"
-```
-
-### Mapping of MusicBrainz recording IDs to Telegram sources
-
-```bash
-export TELEGRAM_FILE_MAPPING='{
-  "<recording_mbid>": "<file_id_or_direct_url>",
-  "<recording_mbid_2>": {
-    "file_id": "<telegram_file_id>",
-    "direct_url": "https://cdn.example/song.mp3"
-  }
-}'
-```
-
-Supported value formats per recording ID:
-
-1. String `file_id`
-   - `{"<mbid>": "AgACAg..."}`
-2. String `direct_url`
-   - `{"<mbid>": "https://.../song.mp3"}`
-3. Object with one or both fields
-   - `{"<mbid>": {"file_id": "...", "direct_url": "..."}}`
-
-### Optional LinkFilesBot URL template
-
-```bash
-export LINKFILESBOT_URL_TEMPLATE="https://t.me/LinkFilesBot?start={recording_id}"
-```
-
-## Running the service
-
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 7000
-```
+`Daft Punk - One More Time 2000`
 
 ## Endpoints
 
 - `GET /manifest.json`
 - `GET /healthz`
-- `GET /catalog/movie/musicbrainz-recordings.json?search=metallica`
+- `GET /catalog/movie/musicbrainz-popular.json`
+- `GET /catalog/movie/musicbrainz-recent.json`
+- `GET /catalog/movie/musicbrainz-search.json?search=metallica`
 - `GET /meta/movie/mb:<recording-id>.json`
 - `GET /stream/movie/mb:<recording-id>.json`
 
-## Stream Resolution Logic
+## Environment variables
 
-For `GET /stream/movie/mb:<recording-id>.json`:
+### Required
 
-1. Look up `<recording-id>` in `TELEGRAM_FILE_MAPPING`.
-2. If `direct_url` is present, return it as Stremio stream `url`.
-3. Else, if `file_id` is present, call Telegram Bot API `getFile` and return the resolved direct URL.
-4. If no mapping exists, return a fallback stream entry using `externalUrl` (LinkFilesBot deep-link).
+```bash
+MUSICBRAINZ_USER_AGENT="FlixMusicStremioAddon/0.5 (your-contact@example.com)"
+TELEGRAM_API_ID="123456"
+TELEGRAM_API_HASH="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+TELEGRAM_FILE_MAPPING='{}'
+```
 
-## Practical Bot Workflow (Example)
+### Optional tuning (recommended for production)
 
-1. Locate or prepare the track in Telegram (e.g., via `@vkmusic_bot`).
-2. Obtain a direct link or reusable identifier (e.g., via `@LinkFilesBot` or bot-side file handling).
-3. Store the result in `TELEGRAM_FILE_MAPPING` under the corresponding MusicBrainz recording ID.
-4. Consume `/stream/...` from Stremio.
+```bash
+MUSICBRAINZ_BASE="https://musicbrainz.org/ws/2"
+MUSICBRAINZ_SEARCH_LIMIT="20"
+HTTP_TIMEOUT_SECONDS="15"
+MB_CACHE_TTL_SECONDS="120"
+LOG_LEVEL="INFO"
+```
 
-## Notes and Limitations
+### Optional Telegram URL templates
 
-- This project is a PoC and does not include persistent storage.
-- Source mapping is environment-variable based.
-- Telegram access, rate limits, and file availability depend on bot/account setup.
-- Legal/licensing compliance for streamed content is the operator’s responsibility.
+```bash
+# fallback when recording has no mapping and metadata lookup fails
+LINKFILESBOT_URL_TEMPLATE="https://t.me/LinkFilesBot?start={recording_id}"
+
+# metadata-based fallback search URL
+# placeholders: {query}, {query_encoded}
+TELEGRAM_SEARCH_URL_TEMPLATE="https://t.me/vkmusic_bot?start={query_encoded}"
+```
+
+### Mapping schema (`TELEGRAM_FILE_MAPPING`)
+
+Mapping key = MusicBrainz recording ID.
+
+```json
+{
+  "f4d5f6bb-4f95-4a20-9f0a-99f9e1f5f111": {
+    "direct_url": "https://cdn.example.com/song.mp3"
+  },
+  "9cb73623-c4ff-4e5f-b1a0-4b7e6f3140da": {
+    "message_url": "https://t.me/c/123456/789"
+  }
+}
+```
+
+Supported forms:
+
+- URL string:
+  - `https://...` → `direct_url`
+  - `https://t.me/...` → `message_url`
+- Object:
+  - `{ "direct_url": "...", "message_url": "..." }`
+
+## Local run
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 7000
+```
+
+## Vercel deployment
+
+This repository includes:
+
+- `api/index.py` (ASGI entrypoint)
+- `vercel.json` (routes/build)
+
+Steps:
+
+1. Import repository into Vercel.
+2. Configure required env vars.
+3. Deploy.
+4. Verify:
+   - `/healthz`
+   - `/manifest.json`
+
+## Reliability hardening included
+
+- HTTP retries for transient MusicBrainz errors (429/5xx).
+- Configurable request timeout.
+- In-memory TTL cache for MusicBrainz responses.
+- Explicit 502 response mapping for upstream request failures.
+- Health endpoint includes credential and mapping visibility.
+
+## Notes
+
+- This is still a lightweight service (no persistent DB/admin UI).
+- For high-scale production, use external cache/storage and observability.
+- Content licensing/compliance remains operator responsibility.
