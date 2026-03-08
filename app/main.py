@@ -132,9 +132,9 @@ def _env_str(names: str | tuple[str, ...], default: str = "") -> str:
 
 
 def _shortlink_proxy_enabled() -> bool:
-    if _env_bool("SHORTLINK_PROXY_ENABLED", False):
+    if _env_bool("SHORTLINK_PROXY_ENABLED", True):
         return True
-    return _env_bool("PROVIDER_PROXY_POOL_ENABLED", False)
+    return _env_bool("PROVIDER_PROXY_POOL_ENABLED", True)
 
 
 def _shortlink_proxy_scheme() -> str:

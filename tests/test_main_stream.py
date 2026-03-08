@@ -132,6 +132,13 @@ def test_extract_shortlink_target_yandex_redirect():
     assert main._extract_shortlink_target(url) == "https://site--linkfilesbot--gb24qxlnkkt9.code.run/download/1727896"
 
 
+def test_shortlink_proxy_enabled_defaults_to_true(monkeypatch):
+    monkeypatch.delenv("SHORTLINK_PROXY_ENABLED", raising=False)
+    monkeypatch.delenv("PROVIDER_PROXY_POOL_ENABLED", raising=False)
+
+    assert main._shortlink_proxy_enabled() is True
+
+
 def test_expand_direct_stream_url_marks_proxy_failure(monkeypatch):
     failures = []
     proxy = main.ShortlinkProxyEndpoint(proxy_id="proxy-1", proxy_url="http://proxy.example:8080", label="proxy")
