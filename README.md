@@ -56,6 +56,15 @@ DIRECT_DOWNLOAD_BOT_USERNAME="LinkFilesBot"
 
 # bot response wait interval
 MT_PROTO_WAIT_SECONDS="6"
+
+# optional shortlink proxy fallback
+# enabled by default; if a clck.ru link returns captcha on the server IP,
+# the addon can retry resolution through Webshare proxies
+SHORTLINK_PROXY_WEBSHARE_TOKEN="your-webshare-token"
+SHORTLINK_PROXY_WEBSHARE_MAX_RESULTS="20"
+SHORTLINK_PROXY_MAX_ATTEMPTS="3"
+SHORTLINK_PROXY_COOLDOWN_SECONDS="180"
+SHORTLINK_PROXY_FAIL_STREAK="2"
 ```
 
 ## Optional static mapping
